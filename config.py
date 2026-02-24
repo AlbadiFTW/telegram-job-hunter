@@ -43,9 +43,11 @@ REQUIRED_KEYWORDS = [
 REJECTION_KEYWORDS = [
     "senior", "lead", "manager", "director", "head of",
     "10 years", "8 years", "7 years", "6 years", "5 years",
-    "sap", "salesforce", "mainframe", "cobol", "fortran",
+    "4 years", "3 years", "sr.", "sr ", "principal",
+    "architect", "vp ", "vice president", "c++", "embedded",
+    "sap", "salesforce", "mainframe", "cobol",
     "mechanical", "civil", "electrical", "accounting",
-    "marketing", "sales", "driver", "cleaner",
+    "marketing", "sales", "driver", "cleaner", "secretary",
 ]
 
 # --- Salary Filter ---
