@@ -7,18 +7,23 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-# Load .env file for local development
 load_dotenv()
 
 from config import (
-    SEARCH_KEYWORDS, LOCATION, REQUIRED_KEYWORDS,
-    REJECTION_KEYWORDS, SEEN_JOBS_FILE, MAX_JOBS_PER_MESSAGE,
+    SEARCH_KEYWORDS,
+    LOCATIONS,
+    SCORE_BOOST_KEYWORDS,
+    SCORE_PENALTY_KEYWORDS,
+    REJECTION_KEYWORDS,
+    SEEN_JOBS_FILE,
+    MAX_JOBS_PER_MESSAGE,
+    TELEGRAM_MAX_CHARS,
+    TELEGRAM_SEND_DELAY_SEC,
+    MIN_SCORE,
     TELEGRAM_BOT_TOKEN as _CONFIG_TOKEN,
     TELEGRAM_CHAT_ID as _CONFIG_CHAT_ID,
 )
 
-# GitHub Actions reads from Repository Secrets
-# Local development reads from .env file
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", _CONFIG_TOKEN)
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", _CONFIG_CHAT_ID)
 
@@ -52,40 +57,54 @@ def make_job_id(title, company):
 
 
 # ============================================================
-# RELEVANCE FILTERING
+# RELEVANCE SCORING
 # ============================================================
 
-def is_relevant(title, description=""):
+def score_job(title, description=""):
     text = f"{title} {description}".lower()
 
+    # Hard reject first
     for keyword in REJECTION_KEYWORDS:
         if keyword.lower() in text:
-            return False
+            return -99
 
-    for keyword in REQUIRED_KEYWORDS:
+    score = 0
+
+    # Apply boosts
+    for keyword, boost in SCORE_BOOST_KEYWORDS:
         if keyword.lower() in text:
-            return True
+            score += boost
 
-    return False
+    # Apply penalties
+    for keyword, penalty in SCORE_PENALTY_KEYWORDS:
+        if keyword.lower() in text:
+            score += penalty  # penalty is already negative
+
+    return score
+
+
+def is_relevant(title, description=""):
+    return score_job(title, description) >= MIN_SCORE
 
 
 # ============================================================
 # LINKEDIN SCRAPER
 # ============================================================
 
-def scrape_linkedin(keyword):
+def scrape_linkedin(keyword, location="United Arab Emirates"):
     jobs = []
     query = keyword.replace(" ", "%20")
+    loc = location.replace(" ", "%20")
     url = (
         f"https://www.linkedin.com/jobs/search/"
-        f"?keywords={query}&location=United%20Arab%20Emirates"
+        f"?keywords={query}&location={loc}"
         f"&f_TPR=r86400&f_E=1%2C2"
     )
 
     try:
         response = requests.get(url, headers=HEADERS, timeout=15)
         if response.status_code != 200:
-            print(f"  [LinkedIn] Failed for '{keyword}' — status {response.status_code}")
+            print(f"  [LinkedIn] Failed '{keyword}' in {location} — {response.status_code}")
             return jobs
 
         soup = BeautifulSoup(response.text, "html.parser")
@@ -103,16 +122,17 @@ def scrape_linkedin(keyword):
 
                 title = title_tag.get_text(strip=True)
                 company = company_tag.get_text(strip=True) if company_tag else "Unknown"
-                location = location_tag.get_text(strip=True) if location_tag else "UAE"
+                loc_text = location_tag.get_text(strip=True) if location_tag else location
                 link = link_tag["href"].split("?")[0]
 
                 if is_relevant(title):
                     jobs.append({
                         "title": title,
                         "company": company,
-                        "location": location,
+                        "location": loc_text,
                         "url": link,
                         "source": "LinkedIn",
+                        "score": score_job(title),
                         "id": make_job_id(title, company)
                     })
 
@@ -129,7 +149,7 @@ def scrape_linkedin(keyword):
 # WUZZUF SCRAPER
 # ============================================================
 
-def scrape_wuzzuf(keyword):
+def scrape_wuzzuf(keyword, location="UAE"):
     jobs = []
     query = keyword.replace(" ", "+")
     url = f"https://wuzzuf.net/search/jobs/?q={query}&a=hpb"
@@ -137,7 +157,7 @@ def scrape_wuzzuf(keyword):
     try:
         response = requests.get(url, headers=HEADERS, timeout=15)
         if response.status_code != 200:
-            print(f"  [Wuzzuf] Failed for '{keyword}' — status {response.status_code}")
+            print(f"  [Wuzzuf] Failed '{keyword}' — {response.status_code}")
             return jobs
 
         soup = BeautifulSoup(response.text, "html.parser")
@@ -155,16 +175,17 @@ def scrape_wuzzuf(keyword):
 
                 title = title_tag.get_text(strip=True)
                 company = company_tag.get_text(strip=True) if company_tag else "Unknown"
-                location = location_tag.get_text(strip=True) if location_tag else "UAE"
+                loc_text = location_tag.get_text(strip=True) if location_tag else "UAE"
                 link = "https://wuzzuf.net" + link_tag["href"] if link_tag["href"].startswith("/") else link_tag["href"]
 
                 if is_relevant(title):
                     jobs.append({
                         "title": title,
                         "company": company,
-                        "location": location,
+                        "location": loc_text,
                         "url": link,
                         "source": "Wuzzuf",
+                        "score": score_job(title),
                         "id": make_job_id(title, company)
                     })
 
@@ -197,28 +218,39 @@ def send_telegram_message(text):
         print(f"[Telegram] Error: {e}")
 
 
-def format_job_message(jobs, total_new):
+def send_jobs_in_chunks(jobs, total_new):
+    """Split jobs into multiple messages if needed to stay under Telegram limit."""
     date_str = datetime.now().strftime("%d %b %Y")
-    header = f"🚀 <b>Job Alert — {date_str}</b>\n"
-    header += f"Found <b>{total_new} new jobs</b> matching your profile\n"
-    header += "─" * 30 + "\n\n"
+    header = (
+        f"🚀 <b>Job Alert — {date_str}</b>\n"
+        f"Found <b>{total_new} new jobs</b> matching your profile\n"
+        f"{'─' * 30}\n\n"
+    )
 
-    body = ""
-    for job in jobs[:MAX_JOBS_PER_MESSAGE]:
-        body += f"💼 <b>{job['title']}</b>\n"
-        body += f"🏢 {job['company']}\n"
-        body += f"📍 {job['location']}\n"
-        body += f"🌐 {job['source']}\n"
-        body += f"🔗 <a href='{job['url']}'>Apply Now</a>\n"
-        body += "\n"
+    current_message = header
+    jobs_in_current = 0
 
-    footer = ""
-    if total_new > MAX_JOBS_PER_MESSAGE:
-        footer = f"... and {total_new - MAX_JOBS_PER_MESSAGE} more jobs found today.\n"
+    for i, job in enumerate(jobs):
+        job_text = (
+            f"💼 <b>{job['title']}</b>\n"
+            f"🏢 {job['company']}\n"
+            f"📍 {job['location']}\n"
+            f"🌐 {job['source']}\n"
+            f"🔗 <a href='{job['url']}'>Apply Now</a>\n\n"
+        )
 
-    footer += "\n💪 Good luck Abdul Rahman!"
+        # If adding this job would exceed limit, send current and start new message
+        if len(current_message) + len(job_text) > TELEGRAM_MAX_CHARS:
+            send_telegram_message(current_message)
+            time.sleep(TELEGRAM_SEND_DELAY_SEC)
+            current_message = f"🚀 <b>Job Alert (continued)</b>\n\n"
 
-    return header + body + footer
+        current_message += job_text
+        jobs_in_current += 1
+
+    # Send the last message
+    current_message += "\n💪 Good luck Abdul Rahman!"
+    send_telegram_message(current_message)
 
 
 def send_no_jobs_message():
@@ -243,28 +275,38 @@ def main():
     all_jobs = []
     seen_ids = set()
 
+    # Search all configured locations for each keyword
     for keyword in SEARCH_KEYWORDS:
         print(f"Searching: '{keyword}'...")
 
-        linkedin_jobs = scrape_linkedin(keyword)
-        print(f"  [LinkedIn] Found {len(linkedin_jobs)} relevant listings")
+        for location in LOCATIONS:
+            linkedin_jobs = scrape_linkedin(keyword, location)
+            print(f"  [LinkedIn] '{location}' — {len(linkedin_jobs)} listings")
+
+            for job in linkedin_jobs:
+                if job["id"] not in seen_jobs and job["id"] not in seen_ids:
+                    all_jobs.append(job)
+                    seen_ids.add(job["id"])
+
+            time.sleep(1.5)
 
         wuzzuf_jobs = scrape_wuzzuf(keyword)
         print(f"  [Wuzzuf] Found {len(wuzzuf_jobs)} relevant listings")
 
-        for job in linkedin_jobs + wuzzuf_jobs:
+        for job in wuzzuf_jobs:
             if job["id"] not in seen_jobs and job["id"] not in seen_ids:
                 all_jobs.append(job)
                 seen_ids.add(job["id"])
 
         time.sleep(2)
 
+    # Sort by score descending — best matches first
+    all_jobs.sort(key=lambda x: x.get("score", 0), reverse=True)
+
     print(f"\nTotal new jobs found: {len(all_jobs)}")
 
     if all_jobs:
-        all_jobs.sort(key=lambda x: x["source"])
-        message = format_job_message(all_jobs, len(all_jobs))
-        send_telegram_message(message)
+        send_jobs_in_chunks(all_jobs[:MAX_JOBS_PER_MESSAGE * 2], len(all_jobs))
         print("[Telegram] Notification sent!")
 
         for job in all_jobs:

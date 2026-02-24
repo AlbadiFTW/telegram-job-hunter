@@ -4,10 +4,16 @@ A Python job scraper that monitors **LinkedIn** and **Wuzzuf** for UAE tech jobs
 
 No server needed. Completely free to run.
 
+## New Additions
+
+- **Job Application Tracker Bot** — log applications and track interview/rejection stats via Telegram commands.
+- **Daily Interview Questions** — sends one technical and one behavioural question each morning.
+- **Weekly Summary** — sends a weekly snapshot of applications and outcomes.
+
 ## How It Works
 
 1. GitHub Actions triggers the scraper 3 times daily at 7AM, 11AM, and 5PM UAE time
-2. The scraper searches LinkedIn and Wuzzuf for tech jobs in the UAE
+2. The scraper searches LinkedIn across all configured locations and Wuzzuf for tech jobs
 3. Jobs are filtered by relevance — senior roles, unrelated fields, and already-seen jobs are excluded
 4. New matching jobs are sent to your Telegram with title, company, location, and apply link
 5. Seen jobs are saved back to the repo so you never get duplicates
@@ -57,7 +63,7 @@ TELEGRAM_BOT_TOKEN=your_token_here
 TELEGRAM_CHAT_ID=your_chat_id_here
 ```
 
-Keep `config.py` with placeholders — the scraper reads from `.env` automatically.
+Keep `config.py` with placeholders — the scraper reads from `.env` automatically and falls back to `config.py` values if env vars are missing.
 
 ### Step 4 — Test Locally
 
@@ -79,6 +85,43 @@ You should receive a Telegram message within a minute.
 5. Click **Run workflow** to test manually
 
 From now on it runs automatically 3 times daily — no server, no cost.
+
+## Optional Tools
+
+### Application Tracker Bot (Telegram)
+
+Run locally:
+```bash
+python bot.py
+```
+
+Commands:
+- `/applied <company> <role>`
+- `/interview <company>`
+- `/rejected <company>`
+- `/offer <company>`
+- `/stats`
+- `/list`
+
+Data is saved in `applications.json`.
+
+### Daily Interview Questions
+
+Run manually:
+```bash
+python daily_question.py
+```
+
+Questions are stored in `questions.py`. Seen questions are tracked in `seen_questions.json`.
+
+### Weekly Summary
+
+Run manually:
+```bash
+python weekly_summary.py
+```
+
+Uses `applications.json` to generate a weekly Telegram summary.
 
 ## Troubleshooting
 
@@ -141,7 +184,13 @@ telegram-job-hunter/
 ├── scraper.py              # Main scraper — LinkedIn + Wuzzuf
 ├── config.py               # Keywords, filters, settings
 ├── setup_telegram.py       # One-time helper to get chat ID
+├── bot.py                  # Telegram bot for application tracking
+├── daily_question.py       # Sends daily interview questions
+├── questions.py            # Question bank for daily questions
+├── weekly_summary.py       # Weekly application summary sender
+├── applications.json       # Tracked applications (auto-updated)
 ├── seen_jobs.json          # Tracks seen jobs (auto-updated by GitHub Actions)
+├── seen_questions.json     # Tracks seen interview questions
 ├── requirements.txt        # Python dependencies
 ├── .env                    # Your secrets — local only, never committed
 ├── .gitignore              # Keeps .env off GitHub

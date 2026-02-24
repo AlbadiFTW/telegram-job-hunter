@@ -5,11 +5,11 @@
 
 # --- Telegram Settings ---
 # Get these by messaging @BotFather on Telegram
-TELEGRAM_BOT_TOKEN= "your_actual_token"
-TELEGRAM_CHAT_ID= "your_actual_chat_id"
+# Keep placeholders here — real values go in .env file
+TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
 
 # --- Search Keywords ---
-# These are sent as search queries to each job board
 SEARCH_KEYWORDS = [
     "full stack developer",
     "software engineer",
@@ -23,37 +23,68 @@ SEARCH_KEYWORDS = [
     "graduate software engineer",
 ]
 
-# --- Location ---
-LOCATION = "United Arab Emirates"
+# --- Locations to search ---
+# Scraper will search each keyword in each location
+LOCATIONS = [# UAE
+    "Al Ain, United Arab Emirates",
+    "Abu Dhabi, United Arab Emirates", 
+    "Dubai, United Arab Emirates",
+    "Sharjah, United Arab Emirates",
+    # Oman
+    "Muscat, Oman",
+    "Bawshar, Oman",
+    "Āmarāt, Oman",
+    "sur, Oman",
+    # Qatar
+    "Doha, Qatar",
+    "Lusail, Qatar",
+    # Kuwait
+    "Kuwait City, Kuwait",
+    "Salmiya, Kuwait",
+    "Hawalli, Kuwait",
+    # Saudi Arabia (optional — huge market)
+    "Riyadh, Saudi Arabia",
+    "Jeddah, Saudi Arabia",
+    "Dammam, Saudi Arabia",]
 
-# --- Relevance Filter ---
-# Jobs must contain at least ONE of these to pass filtering
-# This avoids irrelevant results from broad keyword searches
-REQUIRED_KEYWORDS = [
-    "javascript", "typescript", "react", "next.js", "nextjs",
-    "node", "node.js", "nodejs", "express", "python",
-    "full stack", "fullstack", "full-stack",
-    "junior", "graduate", "entry level", "fresh", "0-2 years",
+# --- Relevance Scoring ---
+# Jobs are scored — only sent if score >= MIN_SCORE
+MIN_SCORE = 1
+
+# Keywords that boost the score (job is more likely relevant)
+SCORE_BOOST_KEYWORDS = [
+    ("junior", 2), ("graduate", 2), ("entry level", 2), ("entry-level", 2),
+    ("fresh", 2), ("0-2 years", 2), ("0-1 year", 2), ("trainee", 2),
+    ("react", 1), ("next.js", 2), ("nextjs", 1), ("node", 1),
+    ("node.js", 1), ("nodejs", 1), ("python", 1), ("typescript", 2),
+    ("javascript", 1), ("full stack", 1), ("fullstack", 1),
+    ("express", 1), ("postgresql", 1), ("prisma", 2), ("tailwind", 1),
+    ("rest api", 1), ("jwt", 1), ("api", 1), ("socket.io", 2),
 ]
 
-# --- Rejection Filter ---
-# Jobs containing ANY of these will be skipped entirely
+# Keywords that lower the score (job is less likely relevant)
+SCORE_PENALTY_KEYWORDS = [
+    ("senior", -3), ("sr.", -3), ("sr ", -3), ("lead", -3),
+    ("principal", -3), ("architect", -3), ("head of", -3),
+    ("director", -3), ("manager", -3), ("vp ", -3),
+    ("vice president", -3), ("10 years", -3), ("8 years", -3),
+    ("7 years", -3), ("6 years", -3), ("5 years", -3),
+]
+
+# Hard reject — skip immediately regardless of score
 REJECTION_KEYWORDS = [
-    "senior", "lead", "manager", "director", "head of",
-    "10 years", "8 years", "7 years", "6 years", "5 years",
-    "4 years", "3 years", "sr.", "sr ", "principal",
-    "architect", "vp ", "vice president", "c++", "embedded",
-    "sap", "salesforce", "mainframe", "cobol",
+    "c++", "embedded", "sap", "salesforce", "mainframe", "cobol",
     "mechanical", "civil", "electrical", "accounting",
     "marketing", "sales", "driver", "cleaner", "secretary",
+    "commission", "telesales", "door to door", "odoo functional",
 ]
 
-# --- Salary Filter ---
-# Skip jobs that mention very low salaries (optional)
-MIN_SALARY_AED = 3000  # Skip if explicitly mentions below this
+# --- Telegram Safety ---
+TELEGRAM_MAX_CHARS = 3900    # Telegram limit is 4096, leave margin
+TELEGRAM_SEND_DELAY_SEC = 1.1
 
 # --- File to track seen jobs ---
 SEEN_JOBS_FILE = "seen_jobs.json"
 
-# --- Max jobs per notification ---
+# --- Max jobs per notification message ---
 MAX_JOBS_PER_MESSAGE = 10
