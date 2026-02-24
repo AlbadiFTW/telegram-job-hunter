@@ -1,20 +1,25 @@
-from dotenv import load_dotenv
-load_dotenv()
-import requests
-from bs4 import BeautifulSoup
-import json
 import os
+import requests
+import json
 import time
 import hashlib
 from datetime import datetime
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+
+# Load .env file for local development
+load_dotenv()
+
 from config import (
     SEARCH_KEYWORDS, LOCATION, REQUIRED_KEYWORDS,
     REJECTION_KEYWORDS, SEEN_JOBS_FILE, MAX_JOBS_PER_MESSAGE,
+    TELEGRAM_BOT_TOKEN as _CONFIG_TOKEN,
+    TELEGRAM_CHAT_ID as _CONFIG_CHAT_ID,
 )
 
-# Read tokens from environment variables (GitHub Actions) or fall back to config.py
-from config import TELEGRAM_BOT_TOKEN as _CONFIG_TOKEN
-from config import TELEGRAM_CHAT_ID as _CONFIG_CHAT_ID
+# GitHub Actions reads from Repository Secrets
+# Local development reads from .env file
+# Falls back to config.py placeholders
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", _CONFIG_TOKEN)
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", _CONFIG_CHAT_ID)
 
