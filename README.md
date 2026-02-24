@@ -1,22 +1,22 @@
 # UAE Job Scraper 🚀
 
-A Python job scraper that monitors **Bayt.com** and **LinkedIn** daily for UAE tech jobs and sends new listings directly to your **Telegram** — automatically, every morning at 7AM UAE time via GitHub Actions.
+A Python job scraper that monitors **LinkedIn** and **Wuzzuf** for UAE tech jobs and sends new listings directly to your **Telegram** — automatically, 3 times daily (7AM, 11AM, 5PM UAE time) via GitHub Actions.
 
 No server needed. Completely free to run.
 
 ## How It Works
 
-1. GitHub Actions triggers the scraper every morning at 7AM UAE time
-2. The scraper searches Bayt.com and LinkedIn for tech jobs in the UAE
-3. Jobs are filtered by relevance — seniority, unrelated fields, and already-seen jobs are excluded
+1. GitHub Actions triggers the scraper 3 times daily at 7AM, 11AM, and 5PM UAE time
+2. The scraper searches LinkedIn and Wuzzuf for tech jobs in the UAE
+3. Jobs are filtered by relevance — senior roles, unrelated fields, and already-seen jobs are excluded
 4. New matching jobs are sent to your Telegram with title, company, location, and apply link
 5. Seen jobs are saved back to the repo so you never get duplicates
 
 ## Example Telegram Message
 
 ```
-🚀 Job Alert — 23 Feb 2026
-Found 8 new jobs matching your profile
+🚀 Job Alert — 24 Feb 2026
+Found 6 new jobs matching your profile
 ──────────────────────────────
 
 💼 Junior Software Engineer
@@ -28,7 +28,7 @@ Found 8 new jobs matching your profile
 💼 Full Stack Developer
 🏢 Careem
 📍 Abu Dhabi, UAE
-🌐 Bayt.com
+🌐 Wuzzuf
 🔗 Apply Now
 ...
 ```
@@ -44,18 +44,20 @@ Found 8 new jobs matching your profile
 ### Step 2 — Get Your Chat ID
 
 1. Send your new bot any message (e.g. "hello")
-2. Install dependencies: `pip install -r requirements.txt`
+2. Install dependencies: `pip install requests beautifulsoup4 python-dotenv`
 3. Edit `setup_telegram.py` — paste your bot token
 4. Run: `python setup_telegram.py`
 5. Copy the **Chat ID** from the output
 
-### Step 3 — Configure
+### Step 3 — Configure Locally
 
-Edit `config.py`:
-```python
-TELEGRAM_BOT_TOKEN = "your_token_here"
-TELEGRAM_CHAT_ID = "your_chat_id_here"
+Create a `.env` file in the project root (never committed to GitHub):
 ```
+TELEGRAM_BOT_TOKEN=your_token_here
+TELEGRAM_CHAT_ID=your_chat_id_here
+```
+
+Keep `config.py` with placeholders — the scraper reads from `.env` automatically.
 
 ### Step 4 — Test Locally
 
@@ -64,58 +66,85 @@ pip install -r requirements.txt
 python scraper.py
 ```
 
-You should receive a Telegram message within seconds.
+You should receive a Telegram message within a minute.
 
 ### Step 5 — Deploy to GitHub Actions (Free Automation)
 
 1. Push this repo to GitHub
 2. Go to your repo → **Settings** → **Secrets and variables** → **Actions**
-3. Add two secrets:
-   - `TELEGRAM_BOT_TOKEN` — your bot token
-   - `TELEGRAM_CHAT_ID` — your chat ID
+3. Under **Repository secrets** add:
+   - `TELEGRAM_BOT_TOKEN` — your bot token (no quotes)
+   - `TELEGRAM_CHAT_ID` — your chat ID (no quotes)
 4. Go to **Actions** tab → enable workflows
-5. Click **Run workflow** to test it manually
+5. Click **Run workflow** to test manually
 
-From now on it runs automatically every day at 7AM UAE time.
+From now on it runs automatically 3 times daily — no server, no cost.
 
-## Customisation
+## Troubleshooting
 
-### Change search keywords (`config.py`)
-```python
-SEARCH_KEYWORDS = [
-    "full stack developer",
-    "React developer",
-    # Add or remove as needed
-]
+**Bot not sending messages**
+- Make sure you sent your bot a message before running `setup_telegram.py`
+- Double check your token and chat ID have no quotes or extra spaces in GitHub Secrets
+- Secrets go under Settings → Secrets and variables → Actions → **Repository secrets** (not Environments)
+
+**lxml install fails on Windows**
+- Remove `lxml` from `requirements.txt` and run `pip install requests beautifulsoup4 python-dotenv` instead
+
+**No jobs found**
+- LinkedIn and Wuzzuf occasionally change their HTML — open an issue and I'll push a fix
+- Test manually by running `python scraper.py` locally
+
+**Duplicate jobs appearing**
+- Make sure `seen_jobs.json` is being committed back by GitHub Actions
+- Check the Actions log for the "Commit updated seen_jobs.json" step
+
+**Want to reset and resend all current jobs?**
+```bash
+python -c "import json; open('seen_jobs.json', 'w').write('[]')"
+git add seen_jobs.json
+git commit -m "fix: reset seen jobs"
+git push
 ```
 
-### Change filtering (`config.py`)
-```python
-# Jobs must contain at least one of these
-REQUIRED_KEYWORDS = ["react", "node", "python", ...]
+## Customising Keywords For Your Profile
 
-# Jobs containing any of these are skipped
-REJECTION_KEYWORDS = ["senior", "10 years", ...]
+Edit `config.py` to tailor the scraper to your field:
+
+### For Frontend Developers
+```python
+SEARCH_KEYWORDS = ["React developer", "frontend developer", "Vue.js developer"]
 ```
 
-### Change schedule (`.github/workflows/daily_scrape.yml`)
+### For Backend Developers
+```python
+SEARCH_KEYWORDS = ["backend developer", "Node.js developer", "Python developer"]
+```
+
+### For Data/ML Engineers
+```python
+SEARCH_KEYWORDS = ["data engineer", "machine learning engineer", "data scientist"]
+```
+
+### Change Schedule
+Edit `.github/workflows/daily_scrape.yml`:
 ```yaml
-# Currently: 7AM UAE time (03:00 UTC)
+# 7AM, 11AM, 5PM UAE time (UTC+4)
 - cron: "0 3 * * *"
-
-# For 9AM UAE time:
-- cron: "0 5 * * *"
+- cron: "0 7 * * *"
+- cron: "0 13 * * *"
 ```
 
 ## Project Structure
 
 ```
-job-scraper/
-├── scraper.py              # Main scraper — Bayt + LinkedIn
+telegram-job-hunter/
+├── scraper.py              # Main scraper — LinkedIn + Wuzzuf
 ├── config.py               # Keywords, filters, settings
 ├── setup_telegram.py       # One-time helper to get chat ID
-├── seen_jobs.json          # Tracks seen jobs (auto-updated)
+├── seen_jobs.json          # Tracks seen jobs (auto-updated by GitHub Actions)
 ├── requirements.txt        # Python dependencies
+├── .env                    # Your secrets — local only, never committed
+├── .gitignore              # Keeps .env off GitHub
 └── .github/
     └── workflows/
         └── daily_scrape.yml # GitHub Actions automation
@@ -127,56 +156,8 @@ job-scraper/
 - **BeautifulSoup** — HTML parsing
 - **Requests** — HTTP calls
 - **Telegram Bot API** — notifications
-- **GitHub Actions** — free daily automation
+- **GitHub Actions** — free scheduled automation
 
-```
-## Customising Keywords For Your Profile
-
-Edit `config.py` to tailor the scraper to your specific field:
-
-### For Frontend Developers
-```python
-SEARCH_KEYWORDS = ["React developer", "frontend developer", "Vue.js developer", "UI developer"]
-```
-
-### For Backend Developers
-```python
-SEARCH_KEYWORDS = ["backend developer", "Node.js developer", "Python developer", "API developer"]
-```
-
-### For Data/ML Engineers
-```python
-SEARCH_KEYWORDS = ["data engineer", "machine learning engineer", "data scientist", "AI engineer"]
-```
-
-### For Any Field
-Just replace the keywords with whatever role you're targeting. The scraper will search each keyword separately and combine the results.
-
-## Troubleshooting
-
-**Bot not sending messages**
-- Make sure you sent your bot a message before running `setup_telegram.py`
-- Double check your token and chat ID in `config.py`
-- Verify your bot token has no extra spaces
-
-**lxml install fails on Windows**
-- lxml isn't required — remove it from `requirements.txt` and run `pip install requests beautifulsoup4` instead
-
-**No jobs found**
-- Bayt and LinkedIn occasionally change their HTML structure which breaks the scraper
-- Open an issue on GitHub and I'll push a fix
-- You can test manually by running `python scraper.py` locally
-
-**GitHub Actions not triggering**
-- Go to Actions tab and make sure workflows are enabled
-- Use the "Run workflow" button to trigger manually and check the logs
-- Verify your secrets are added correctly in Settings → Secrets
-
-**Duplicate jobs appearing**
-- Make sure `seen_jobs.json` is being committed back to the repo by GitHub Actions
-- Check the Actions log for the "Commit updated seen_jobs.json" step
-
-```
 ## License
 
 MIT

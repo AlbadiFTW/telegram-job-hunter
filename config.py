@@ -32,10 +32,8 @@ LOCATION = "United Arab Emirates"
 REQUIRED_KEYWORDS = [
     "javascript", "typescript", "react", "next.js", "nextjs",
     "node", "node.js", "nodejs", "express", "python",
-    "flask", "postgresql", "sql", "rest api", "api",
-    "full stack", "fullstack", "full-stack", "backend",
-    "frontend", "software engineer", "web developer",
-    "junior", "graduate", "entry level", "fresh",
+    "full stack", "fullstack", "full-stack",
+    "junior", "graduate", "entry level", "fresh", "0-2 years",
 ]
 
 # --- Rejection Filter ---

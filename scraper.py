@@ -19,7 +19,6 @@ from config import (
 
 # GitHub Actions reads from Repository Secrets
 # Local development reads from .env file
-# Falls back to config.py placeholders
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", _CONFIG_TOKEN)
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", _CONFIG_CHAT_ID)
 
@@ -27,6 +26,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer": "https://www.google.com/",
 }
 
 
@@ -36,17 +36,17 @@ HEADERS = {
 
 def load_seen_jobs():
     if os.path.exists(SEEN_JOBS_FILE):
-        with open(SEEN_JOBS_FILE, "r") as f:
+        with open(SEEN_JOBS_FILE, "r", encoding="utf-8") as f:
             return set(json.load(f))
     return set()
 
 
 def save_seen_jobs(seen):
-    with open(SEEN_JOBS_FILE, "w") as f:
+    with open(SEEN_JOBS_FILE, "w", encoding="utf-8") as f:
         json.dump(list(seen), f)
 
 
-def make_job_id(title, company, url):
+def make_job_id(title, company):
     raw = f"{title.lower().strip()}{company.lower().strip()}"
     return hashlib.md5(raw.encode()).hexdigest()
 
@@ -58,69 +58,15 @@ def make_job_id(title, company, url):
 def is_relevant(title, description=""):
     text = f"{title} {description}".lower()
 
-    # Reject if contains rejection keywords
     for keyword in REJECTION_KEYWORDS:
         if keyword.lower() in text:
             return False
 
-    # Must contain at least one required keyword
     for keyword in REQUIRED_KEYWORDS:
         if keyword.lower() in text:
             return True
 
     return False
-
-
-# ============================================================
-# BAYT.COM SCRAPER
-# ============================================================
-
-def scrape_bayt(keyword):
-    jobs = []
-    query = keyword.replace(" ", "+")
-    url = f"https://www.bayt.com/en/uae/jobs/{query.lower().replace('+', '-')}-jobs/"
-
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        if response.status_code != 200:
-            print(f"[Bayt] Failed for '{keyword}' — status {response.status_code}")
-            return jobs
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        listings = soup.find_all("li", {"class": lambda c: c and "has-pointer-d" in c})
-
-        for listing in listings[:20]:
-            try:
-                title_tag = listing.find("h2", {"class": "m0 t-regular"})
-                company_tag = listing.find("b", {"class": "t-default"})
-                location_tag = listing.find("span", {"class": "t-mute"})
-                link_tag = listing.find("a", href=True)
-
-                if not title_tag or not link_tag:
-                    continue
-
-                title = title_tag.get_text(strip=True)
-                company = company_tag.get_text(strip=True) if company_tag else "Unknown"
-                location = location_tag.get_text(strip=True) if location_tag else "UAE"
-                link = "https://www.bayt.com" + link_tag["href"] if link_tag["href"].startswith("/") else link_tag["href"]
-
-                if is_relevant(title):
-                    jobs.append({
-                        "title": title,
-                        "company": company,
-                        "location": location,
-                        "url": link,
-                        "source": "Bayt.com",
-                        "id": make_job_id(title, company, link)
-                    })
-
-            except Exception as e:
-                continue
-
-    except Exception as e:
-        print(f"[Bayt] Error scraping '{keyword}': {e}")
-
-    return jobs
 
 
 # ============================================================
@@ -133,13 +79,13 @@ def scrape_linkedin(keyword):
     url = (
         f"https://www.linkedin.com/jobs/search/"
         f"?keywords={query}&location=United%20Arab%20Emirates"
-        f"&f_TPR=r86400&f_E=1%2C2"  # Posted last 24h, Entry/Associate level
+        f"&f_TPR=r86400&f_E=1%2C2"
     )
 
     try:
         response = requests.get(url, headers=HEADERS, timeout=15)
         if response.status_code != 200:
-            print(f"[LinkedIn] Failed for '{keyword}' — status {response.status_code}")
+            print(f"  [LinkedIn] Failed for '{keyword}' — status {response.status_code}")
             return jobs
 
         soup = BeautifulSoup(response.text, "html.parser")
@@ -167,14 +113,66 @@ def scrape_linkedin(keyword):
                         "location": location,
                         "url": link,
                         "source": "LinkedIn",
-                        "id": make_job_id(title, company, link)
+                        "id": make_job_id(title, company)
                     })
 
             except Exception:
                 continue
 
     except Exception as e:
-        print(f"[LinkedIn] Error scraping '{keyword}': {e}")
+        print(f"  [LinkedIn] Error: {e}")
+
+    return jobs
+
+
+# ============================================================
+# WUZZUF SCRAPER
+# ============================================================
+
+def scrape_wuzzuf(keyword):
+    jobs = []
+    query = keyword.replace(" ", "+")
+    url = f"https://wuzzuf.net/search/jobs/?q={query}&a=hpb"
+
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=15)
+        if response.status_code != 200:
+            print(f"  [Wuzzuf] Failed for '{keyword}' — status {response.status_code}")
+            return jobs
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        listings = soup.find_all("div", {"class": "css-1gatmva"})
+
+        for listing in listings[:20]:
+            try:
+                title_tag = listing.find("h2", {"class": "css-m604qf"})
+                company_tag = listing.find("a", {"class": "css-17s97q8"})
+                location_tag = listing.find("span", {"class": "css-5wys0k"})
+                link_tag = title_tag.find("a") if title_tag else None
+
+                if not title_tag or not link_tag:
+                    continue
+
+                title = title_tag.get_text(strip=True)
+                company = company_tag.get_text(strip=True) if company_tag else "Unknown"
+                location = location_tag.get_text(strip=True) if location_tag else "UAE"
+                link = "https://wuzzuf.net" + link_tag["href"] if link_tag["href"].startswith("/") else link_tag["href"]
+
+                if is_relevant(title):
+                    jobs.append({
+                        "title": title,
+                        "company": company,
+                        "location": location,
+                        "url": link,
+                        "source": "Wuzzuf",
+                        "id": make_job_id(title, company)
+                    })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"  [Wuzzuf] Error: {e}")
 
     return jobs
 
@@ -243,38 +241,32 @@ def main():
 
     seen_jobs = load_seen_jobs()
     all_jobs = []
-    seen_ids = set()  # deduplicate within this run
+    seen_ids = set()
 
     for keyword in SEARCH_KEYWORDS:
         print(f"Searching: '{keyword}'...")
 
-        # Scrape Bayt
-        bayt_jobs = scrape_bayt(keyword)
-        print(f"  [Bayt] Found {len(bayt_jobs)} relevant listings")
-
-        # Scrape LinkedIn
         linkedin_jobs = scrape_linkedin(keyword)
         print(f"  [LinkedIn] Found {len(linkedin_jobs)} relevant listings")
 
-        for job in bayt_jobs + linkedin_jobs:
+        wuzzuf_jobs = scrape_wuzzuf(keyword)
+        print(f"  [Wuzzuf] Found {len(wuzzuf_jobs)} relevant listings")
+
+        for job in linkedin_jobs + wuzzuf_jobs:
             if job["id"] not in seen_jobs and job["id"] not in seen_ids:
                 all_jobs.append(job)
                 seen_ids.add(job["id"])
 
-        time.sleep(2)  # Be polite to servers
+        time.sleep(2)
 
     print(f"\nTotal new jobs found: {len(all_jobs)}")
 
     if all_jobs:
-        # Sort: LinkedIn first, then Bayt
         all_jobs.sort(key=lambda x: x["source"])
-
-        # Send Telegram notification
         message = format_job_message(all_jobs, len(all_jobs))
         send_telegram_message(message)
         print("[Telegram] Notification sent!")
 
-        # Update seen jobs
         for job in all_jobs:
             seen_jobs.add(job["id"])
         save_seen_jobs(seen_jobs)
