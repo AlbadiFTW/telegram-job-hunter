@@ -279,6 +279,8 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================================
 
 def main():
+    import asyncio
+    asyncio.set_event_loop(asyncio.new_event_loop())
     print("Starting JobHunter Bot...")
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
