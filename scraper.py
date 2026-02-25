@@ -242,7 +242,7 @@ def send_jobs_in_chunks(jobs, total_new):
         # If adding this job would exceed limit, send current and start new message
         if len(current_message) + len(job_text) > TELEGRAM_MAX_CHARS:
             send_telegram_message(current_message)
-            time.sleep(TELEGRAM_SEND_DELAY_SEC)
+            time.sleep(3)  # Avoid hitting rate limits
             current_message = f"🚀 <b>Job Alert (continued)</b>\n\n"
 
         current_message += job_text
@@ -288,7 +288,7 @@ def main():
                     all_jobs.append(job)
                     seen_ids.add(job["id"])
 
-            time.sleep(1.5)
+            time.sleep(3)
 
         wuzzuf_jobs = scrape_wuzzuf(keyword)
         print(f"  [Wuzzuf] Found {len(wuzzuf_jobs)} relevant listings")

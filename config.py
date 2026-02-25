@@ -25,27 +25,12 @@ SEARCH_KEYWORDS = [
 
 # --- Locations to search ---
 # Scraper will search each keyword in each location
-LOCATIONS = [# UAE
-    "Al Ain, United Arab Emirates",
-    "Abu Dhabi, United Arab Emirates", 
-    "Dubai, United Arab Emirates",
-    "Sharjah, United Arab Emirates",
-    # Oman
+LOCATIONS = [
+    "United Arab Emirates",
     "Muscat, Oman",
-    "Bawshar, Oman",
-    "Āmarāt, Oman",
-    "sur, Oman",
-    # Qatar
     "Doha, Qatar",
-    "Lusail, Qatar",
-    # Kuwait
-    "Kuwait City, Kuwait",
-    "Salmiya, Kuwait",
-    "Hawalli, Kuwait",
-    # Saudi Arabia (optional — huge market)
     "Riyadh, Saudi Arabia",
-    "Jeddah, Saudi Arabia",
-    "Dammam, Saudi Arabia",]
+    ]
 
 # --- Relevance Scoring ---
 # Jobs are scored — only sent if score >= MIN_SCORE
