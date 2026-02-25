@@ -34,10 +34,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add seen_jobs.json
-          git stash
-          git pull origin main --rebase
-          git stash pop
+          git pull origin main --rebase --autostash
           git add seen_jobs.json
           git diff --staged --quiet || git commit -m "chore: update seen jobs [skip ci]"
           git push
@@ -62,10 +59,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add seen_questions.json || true
-          git stash || true
-          git pull origin main --rebase
-          git stash pop || true
+          git pull origin main --rebase --autostash
           git add seen_questions.json || true
           git diff --staged --quiet || git commit -m "chore: update seen questions [skip ci]"
           git push || true

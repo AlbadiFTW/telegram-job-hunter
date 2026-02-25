@@ -27,9 +27,9 @@ SEARCH_KEYWORDS = [
 # Scraper will search each keyword in each location
 LOCATIONS = [
     "United Arab Emirates",
-    "Muscat, Oman",
-    "Doha, Qatar",
-    "Riyadh, Saudi Arabia",
+    "Oman",
+    "Qatar",
+    "Saudi Arabia",
     ]
 
 # --- Relevance Scoring ---
@@ -44,7 +44,7 @@ SCORE_BOOST_KEYWORDS = [
     ("node.js", 1), ("nodejs", 1), ("python", 1), ("typescript", 2),
     ("javascript", 1), ("full stack", 1), ("fullstack", 1),
     ("express", 1), ("postgresql", 1), ("prisma", 2), ("tailwind", 1),
-    ("rest api", 1), ("jwt", 1), ("api", 1), ("socket.io", 2),
+    ("rest api", 1), ("jwt", 1), ("socket.io", 2),
 ]
 
 # Keywords that lower the score (job is less likely relevant)
@@ -62,7 +62,8 @@ REJECTION_KEYWORDS = [
     "mechanical", "civil", "electrical", "accounting",
     "marketing", "sales", "driver", "cleaner", "secretary",
     "commission", "telesales", "door to door", "odoo functional",
-     "emirati", "uae nationals", "national talent", "nationals only",
+    "emirati", "uae nationals", "national talent", "nationals only",
+    "php", "wordpress", "laravel",
 ]
 
 # --- Telegram Safety ---

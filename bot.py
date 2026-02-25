@@ -1,34 +1,41 @@
 """
 bot.py
 Interactive Telegram bot for tracking job applications.
-Run this locally: python bot.py
+Deploy to Render as a background worker — runs 24/7.
 
 Commands:
   /applied <company> <role>  — Log a new application
-  /interview <company>       — Mark company as reached interview stage
-  /rejected <company>        — Mark company as rejected you
-  /offer <company>           — Mark company as gave you an offer 🎉
+  /interview <company>       — Mark as interview stage
+  /rejected <company>        — Mark as rejected
+  /offer <company>           — Mark as offer received
   /stats                     — Show all-time stats
   /list                      — Show this week's applications
   /help                      — Show all commands
 """
 
 import os
-import json
 import logging
-from datetime import datetime, timedelta
+import requests
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 load_dotenv()
 
-from config import (
-    TELEGRAM_BOT_TOKEN as _CONFIG_TOKEN,
-)
-
+from config import TELEGRAM_BOT_TOKEN as _CONFIG_TOKEN
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", _CONFIG_TOKEN)
-APPLICATIONS_FILE = "applications.json"
+
+# --- Supabase Config ---
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://gmxjjqpoehbsjtqgbdot.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+
+SUPABASE_HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=representation",
+}
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -37,26 +44,46 @@ logging.basicConfig(
 
 
 # ============================================================
-# DATA HELPERS
+# SUPABASE HELPERS
 # ============================================================
 
-def load_applications():
-    if os.path.exists(APPLICATIONS_FILE):
-        with open(APPLICATIONS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
+def db_insert(data: dict):
+    response = requests.post(
+        f"{SUPABASE_URL}/rest/v1/applications",
+        headers=SUPABASE_HEADERS,
+        json=data,
+        timeout=10
+    )
+    return response.json()
 
 
-def save_applications(apps):
-    with open(APPLICATIONS_FILE, "w", encoding="utf-8") as f:
-        json.dump(apps, f, indent=2)
+def db_get_all():
+    response = requests.get(
+        f"{SUPABASE_URL}/rest/v1/applications?order=date.desc",
+        headers=SUPABASE_HEADERS,
+        timeout=10
+    )
+    return response.json()
 
 
-def find_application(apps, company):
-    """Find most recent application matching company name (case insensitive)."""
-    company_lower = company.lower()
-    matches = [a for a in apps if company_lower in a["company"].lower()]
-    return matches[-1] if matches else None
+def db_update(app_id: int, data: dict):
+    response = requests.patch(
+        f"{SUPABASE_URL}/rest/v1/applications?id=eq.{app_id}",
+        headers=SUPABASE_HEADERS,
+        json=data,
+        timeout=10
+    )
+    return response.json()
+
+
+def find_application(company: str):
+    response = requests.get(
+        f"{SUPABASE_URL}/rest/v1/applications?company=ilike.*{company}*&order=date.desc&limit=1",
+        headers=SUPABASE_HEADERS,
+        timeout=10
+    )
+    results = response.json()
+    return results[0] if results else None
 
 
 # ============================================================
@@ -95,17 +122,10 @@ async def cmd_applied(update: Update, context: ContextTypes.DEFAULT_TYPE):
     company = args[0]
     role = " ".join(args[1:])
 
-    apps = load_applications()
-    new_app = {
-        "company": company,
-        "role": role,
-        "status": "applied",
-        "date": datetime.now().isoformat(),
-    }
-    apps.append(new_app)
-    save_applications(apps)
+    db_insert({"company": company, "role": role, "status": "applied"})
+    all_apps = db_get_all()
+    total = len(all_apps)
 
-    total = len(apps)
     await update.message.reply_text(
         f"✅ <b>Application logged!</b>\n\n"
         f"🏢 {company}\n"
@@ -122,20 +142,16 @@ async def cmd_interview(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     company = " ".join(context.args)
-    apps = load_applications()
-    app = find_application(apps, company)
+    app = find_application(company)
 
     if not app:
         await update.message.reply_text(
-            f"❌ No application found for <b>{company}</b>.\n"
-            f"Log it first with /applied",
+            f"❌ No application found for <b>{company}</b>.\nLog it first with /applied",
             parse_mode="HTML"
         )
         return
 
-    app["status"] = "interview"
-    app["interview_date"] = datetime.now().isoformat()
-    save_applications(apps)
+    db_update(app["id"], {"status": "interview", "interview_date": datetime.now(timezone.utc).isoformat()})
 
     await update.message.reply_text(
         f"🎯 <b>Interview stage!</b>\n\n"
@@ -151,21 +167,16 @@ async def cmd_rejected(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     company = " ".join(context.args)
-    apps = load_applications()
-    app = find_application(apps, company)
+    app = find_application(company)
 
     if not app:
-        await update.message.reply_text(
-            f"❌ No application found for <b>{company}</b>.",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text(f"❌ No application found for <b>{company}</b>.", parse_mode="HTML")
         return
 
-    app["status"] = "rejected"
-    save_applications(apps)
-
-    total = len(apps)
-    rejections = len([a for a in apps if a.get("status") == "rejected"])
+    db_update(app["id"], {"status": "rejected"})
+    all_apps = db_get_all()
+    total = len(all_apps)
+    rejections = len([a for a in all_apps if a.get("status") == "rejected"])
 
     await update.message.reply_text(
         f"❌ <b>Rejection logged</b>\n\n"
@@ -182,18 +193,13 @@ async def cmd_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     company = " ".join(context.args)
-    apps = load_applications()
-    app = find_application(apps, company)
+    app = find_application(company)
 
     if not app:
-        await update.message.reply_text(
-            f"❌ No application found for <b>{company}</b>.",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text(f"❌ No application found for <b>{company}</b>.", parse_mode="HTML")
         return
 
-    app["status"] = "offer"
-    save_applications(apps)
+    db_update(app["id"], {"status": "offer"})
 
     await update.message.reply_text(
         f"🎉 <b>OFFER RECEIVED!</b>\n\n"
@@ -204,29 +210,24 @@ async def cmd_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    apps = load_applications()
+    all_apps = db_get_all()
 
-    if not apps:
+    if not all_apps:
         await update.message.reply_text(
-            "📊 No applications logged yet.\n"
-            "Start with: /applied &lt;company&gt; &lt;role&gt;",
+            "📊 No applications logged yet.\nStart with: /applied &lt;company&gt; &lt;role&gt;",
             parse_mode="HTML"
         )
         return
 
-    total = len(apps)
-    interviews = len([a for a in apps if a.get("status") == "interview"])
-    rejected = len([a for a in apps if a.get("status") == "rejected"])
-    offers = len([a for a in apps if a.get("status") == "offer"])
-    pending = len([a for a in apps if a.get("status") == "applied"])
+    total = len(all_apps)
+    interviews = len([a for a in all_apps if a.get("status") == "interview"])
+    rejected = len([a for a in all_apps if a.get("status") == "rejected"])
+    offers = len([a for a in all_apps if a.get("status") == "offer"])
+    pending = len([a for a in all_apps if a.get("status") == "applied"])
     interview_rate = round((interviews / total * 100), 1) if total > 0 else 0
 
-    # This week
-    week_ago = datetime.now() - timedelta(days=7)
-    this_week = len([
-        a for a in apps
-        if datetime.fromisoformat(a["date"]) > week_ago
-    ])
+    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    this_week = len([a for a in all_apps if datetime.fromisoformat(a["date"]) > week_ago])
 
     await update.message.reply_text(
         f"📊 <b>Application Stats</b>\n"
@@ -243,43 +244,32 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    apps = load_applications()
+    all_apps = db_get_all()
 
-    if not apps:
+    if not all_apps:
         await update.message.reply_text(
-            "📋 No applications logged yet.\n"
-            "Start with: /applied &lt;company&gt; &lt;role&gt;",
+            "📋 No applications logged yet.\nStart with: /applied &lt;company&gt; &lt;role&gt;",
             parse_mode="HTML"
         )
         return
 
-    week_ago = datetime.now() - timedelta(days=7)
-    this_week = [
-        a for a in apps
-        if datetime.fromisoformat(a["date"]) > week_ago
-    ]
+    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    this_week = [a for a in all_apps if datetime.fromisoformat(a["date"]) > week_ago]
 
     if not this_week:
         await update.message.reply_text("📋 No applications this week yet.")
         return
 
-    status_emoji = {
-        "applied": "📤",
-        "interview": "🎯",
-        "rejected": "❌",
-        "offer": "🎉"
-    }
-
+    status_emoji = {"applied": "📤", "interview": "🎯", "rejected": "❌", "offer": "🎉"}
     lines = ""
-    for app in this_week:
+    for app in this_week[:15]:
         emoji = status_emoji.get(app.get("status"), "📤")
         date_str = datetime.fromisoformat(app["date"]).strftime("%d %b")
         lines += f"{emoji} <b>{app['company']}</b> — {app['role']} ({date_str})\n"
 
     await update.message.reply_text(
         f"📋 <b>This Week's Applications ({len(this_week)})</b>\n"
-        f"{'─' * 25}\n\n"
-        f"{lines}",
+        f"{'─' * 25}\n\n{lines}",
         parse_mode="HTML"
     )
 
@@ -290,10 +280,7 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     print("Starting JobHunter Bot...")
-    print("Press Ctrl+C to stop.\n")
-
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("applied", cmd_applied))
@@ -302,7 +289,6 @@ def main():
     app.add_handler(CommandHandler("offer", cmd_offer))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("list", cmd_list))
-
     print("Bot is running. Send /help to your bot on Telegram.")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
