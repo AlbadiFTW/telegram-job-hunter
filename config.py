@@ -63,7 +63,7 @@ REJECTION_KEYWORDS = [
     "marketing", "sales", "driver", "cleaner", "secretary",
     "commission", "telesales", "door to door", "odoo functional",
     "emirati", "uae nationals", "national talent", "nationals only",
-    "php", "wordpress", "laravel",
+    "php", "wordpress", "laravel", "saudi nationals", "qatari nationals",
 ]
 
 # --- Telegram Safety ---
