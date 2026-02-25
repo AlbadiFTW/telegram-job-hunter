@@ -62,6 +62,7 @@ REJECTION_KEYWORDS = [
     "mechanical", "civil", "electrical", "accounting",
     "marketing", "sales", "driver", "cleaner", "secretary",
     "commission", "telesales", "door to door", "odoo functional",
+     "emirati", "uae nationals", "national talent", "nationals only",
 ]
 
 # --- Telegram Safety ---
