@@ -35,7 +35,11 @@ def get_applications():
         headers=SUPABASE_HEADERS,
         timeout=10
     )
-    return response.json()
+    data = response.json()
+    if not isinstance(data, list):
+        print(f"[Supabase] Unexpected response: {data}")
+        return []
+    return data
 
 
 def send_telegram_message(text):
