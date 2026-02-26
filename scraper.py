@@ -10,16 +10,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from config import (
-    SEARCH_KEYWORDS,
-    LOCATIONS,
-    SCORE_BOOST_KEYWORDS,
-    SCORE_PENALTY_KEYWORDS,
-    REJECTION_KEYWORDS,
-    SEEN_JOBS_FILE,
-    MAX_JOBS_PER_MESSAGE,
-    TELEGRAM_MAX_CHARS,
-    TELEGRAM_SEND_DELAY_SEC,
-    MIN_SCORE,
+    SEARCH_KEYWORDS, LOCATIONS,
+    SCORE_BOOST_KEYWORDS, SCORE_PENALTY_KEYWORDS,
+    REJECTION_KEYWORDS, SEEN_JOBS_FILE, MAX_JOBS_PER_MESSAGE,
+    TELEGRAM_MAX_CHARS, TELEGRAM_SEND_DELAY_SEC, MIN_SCORE,
     TELEGRAM_BOT_TOKEN as _CONFIG_TOKEN,
     TELEGRAM_CHAT_ID as _CONFIG_CHAT_ID,
 )
@@ -63,22 +57,19 @@ def make_job_id(title, company):
 def score_job(title, description=""):
     text = f"{title} {description}".lower()
 
-    # Hard reject first
     for keyword in REJECTION_KEYWORDS:
         if keyword.lower() in text:
             return -99
 
     score = 0
 
-    # Apply boosts
     for keyword, boost in SCORE_BOOST_KEYWORDS:
         if keyword.lower() in text:
             score += boost
 
-    # Apply penalties
     for keyword, penalty in SCORE_PENALTY_KEYWORDS:
         if keyword.lower() in text:
-            score += penalty  # penalty is already negative
+            score += penalty
 
     return score
 
@@ -88,17 +79,17 @@ def is_relevant(title, description=""):
 
 
 # ============================================================
-# LINKEDIN SCRAPER
+# LINKEDIN SCRAPER — removed experience filter to catch more roles
 # ============================================================
 
 def scrape_linkedin(keyword, location="United Arab Emirates"):
     jobs = []
     query = keyword.replace(" ", "%20")
     loc = location.replace(" ", "%20")
+    # Removed f_E=1%2C2 (entry level filter) — catches more junior roles
     url = (
         f"https://www.linkedin.com/jobs/search/"
-        f"?keywords={query}&location={loc}"
-        f"&f_TPR=r86400&f_E=1%2C2"
+        f"?keywords={query}&location={loc}&f_TPR=r86400"
     )
 
     try:
@@ -146,10 +137,171 @@ def scrape_linkedin(keyword, location="United Arab Emirates"):
 
 
 # ============================================================
+# BAYT SCRAPER
+# ============================================================
+
+def scrape_bayt(keyword):
+    jobs = []
+    query = keyword.strip().lower().replace(" ", "-")
+    url = f"https://www.bayt.com/en/uae/jobs/{query}-jobs/"
+
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=15)
+        if response.status_code != 200:
+            print(f"  [Bayt] Failed '{keyword}' — {response.status_code}")
+            return jobs
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        listings = soup.find_all("li", {"class": lambda c: c and "has-pointer-d" in c})
+
+        for listing in listings[:20]:
+            try:
+                title_tag = listing.find("h2", {"class": "m0 t-regular"})
+                company_tag = listing.find("b", {"class": "t-default"})
+                location_tag = listing.find("span", {"class": "t-mute"})
+                link_tag = listing.find("a", href=True)
+
+                if not title_tag or not link_tag:
+                    continue
+
+                title = title_tag.get_text(strip=True)
+                company = company_tag.get_text(strip=True) if company_tag else "Unknown"
+                location = location_tag.get_text(strip=True) if location_tag else "UAE"
+                link = "https://www.bayt.com" + link_tag["href"] if link_tag["href"].startswith("/") else link_tag["href"]
+
+                if is_relevant(title):
+                    jobs.append({
+                        "title": title,
+                        "company": company,
+                        "location": location,
+                        "url": link,
+                        "source": "Bayt",
+                        "score": score_job(title),
+                        "id": make_job_id(title, company)
+                    })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"  [Bayt] Error: {e}")
+
+    return jobs
+
+
+# ============================================================
+# GULFTALEN SCRAPER
+# ============================================================
+
+def scrape_gulftalen(keyword):
+    jobs = []
+    query = keyword.replace(" ", "+")
+    url = f"https://www.gulftalen.com/en/jobs/?search={query}&country=UAE"
+
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=15)
+        if response.status_code != 200:
+            print(f"  [GulfTalent] Failed '{keyword}' — {response.status_code}")
+            return jobs
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        listings = soup.find_all("div", {"class": "job-item"})
+
+        for listing in listings[:20]:
+            try:
+                title_tag = listing.find("h3")
+                company_tag = listing.find("span", {"class": "company"})
+                location_tag = listing.find("span", {"class": "location"})
+                link_tag = listing.find("a", href=True)
+
+                if not title_tag or not link_tag:
+                    continue
+
+                title = title_tag.get_text(strip=True)
+                company = company_tag.get_text(strip=True) if company_tag else "Unknown"
+                location = location_tag.get_text(strip=True) if location_tag else "UAE"
+                href = link_tag["href"]
+                link = "https://www.gulftalen.com" + href if href.startswith("/") else href
+
+                if is_relevant(title):
+                    jobs.append({
+                        "title": title,
+                        "company": company,
+                        "location": location,
+                        "url": link,
+                        "source": "GulfTalent",
+                        "score": score_job(title),
+                        "id": make_job_id(title, company)
+                    })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"  [GulfTalent] Error: {e}")
+
+    return jobs
+
+
+# ============================================================
+# DUBIZZLE SCRAPER
+# ============================================================
+
+def scrape_dubizzle(keyword):
+    jobs = []
+    query = keyword.replace(" ", "%20")
+    url = f"https://uae.dubizzle.com/jobs/?search={query}"
+
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=15)
+        if response.status_code != 200:
+            print(f"  [Dubizzle] Failed '{keyword}' — {response.status_code}")
+            return jobs
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        listings = soup.find_all("article")
+
+        for listing in listings[:20]:
+            try:
+                title_tag = listing.find("h2") or listing.find("h3")
+                company_tag = listing.find("span", {"class": lambda c: c and "company" in str(c).lower()})
+                location_tag = listing.find("span", {"class": lambda c: c and "location" in str(c).lower()})
+                link_tag = listing.find("a", href=True)
+
+                if not title_tag or not link_tag:
+                    continue
+
+                title = title_tag.get_text(strip=True)
+                company = company_tag.get_text(strip=True) if company_tag else "Unknown"
+                location = location_tag.get_text(strip=True) if location_tag else "UAE"
+                href = link_tag["href"]
+                link = "https://uae.dubizzle.com" + href if href.startswith("/") else href
+
+                if is_relevant(title):
+                    jobs.append({
+                        "title": title,
+                        "company": company,
+                        "location": location,
+                        "url": link,
+                        "source": "Dubizzle",
+                        "score": score_job(title),
+                        "id": make_job_id(title, company)
+                    })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"  [Dubizzle] Error: {e}")
+
+    return jobs
+
+
+# ============================================================
 # WUZZUF SCRAPER
 # ============================================================
 
-def scrape_wuzzuf(keyword, location="UAE"):
+def scrape_wuzzuf(keyword):
     jobs = []
     query = keyword.replace(" ", "+")
     url = f"https://wuzzuf.net/search/jobs/?q={query}&a=hpb"
@@ -219,7 +371,6 @@ def send_telegram_message(text):
 
 
 def send_jobs_in_chunks(jobs, total_new):
-    """Split jobs into multiple messages if needed to stay under Telegram limit."""
     date_str = datetime.now().strftime("%d %b %Y")
     header = (
         f"🚀 <b>Job Alert — {date_str}</b>\n"
@@ -228,9 +379,8 @@ def send_jobs_in_chunks(jobs, total_new):
     )
 
     current_message = header
-    jobs_in_current = 0
 
-    for i, job in enumerate(jobs):
+    for job in jobs:
         job_text = (
             f"💼 <b>{job['title']}</b>\n"
             f"🏢 {job['company']}\n"
@@ -239,16 +389,13 @@ def send_jobs_in_chunks(jobs, total_new):
             f"🔗 <a href='{job['url']}'>Apply Now</a>\n\n"
         )
 
-        # If adding this job would exceed limit, send current and start new message
         if len(current_message) + len(job_text) > TELEGRAM_MAX_CHARS:
             send_telegram_message(current_message)
-            time.sleep(3)  # Avoid hitting rate limits
-            current_message = f"🚀 <b>Job Alert (continued)</b>\n\n"
+            time.sleep(TELEGRAM_SEND_DELAY_SEC)
+            current_message = "🚀 <b>Job Alert (continued)</b>\n\n"
 
         current_message += job_text
-        jobs_in_current += 1
 
-    # Send the last message
     current_message += "\n💪 Good luck Abdul Rahman!"
     send_telegram_message(current_message)
 
@@ -275,24 +422,41 @@ def main():
     all_jobs = []
     seen_ids = set()
 
-    # Search all configured locations for each keyword
     for keyword in SEARCH_KEYWORDS:
         print(f"Searching: '{keyword}'...")
 
         for location in LOCATIONS:
             linkedin_jobs = scrape_linkedin(keyword, location)
             print(f"  [LinkedIn] '{location}' — {len(linkedin_jobs)} listings")
-
             for job in linkedin_jobs:
                 if job["id"] not in seen_jobs and job["id"] not in seen_ids:
                     all_jobs.append(job)
                     seen_ids.add(job["id"])
-
             time.sleep(3)
 
-        wuzzuf_jobs = scrape_wuzzuf(keyword)
-        print(f"  [Wuzzuf] Found {len(wuzzuf_jobs)} relevant listings")
+        bayt_jobs = scrape_bayt(keyword)
+        print(f"  [Bayt] Found {len(bayt_jobs)} listings")
+        for job in bayt_jobs:
+            if job["id"] not in seen_jobs and job["id"] not in seen_ids:
+                all_jobs.append(job)
+                seen_ids.add(job["id"])
 
+        gulftalen_jobs = scrape_gulftalen(keyword)
+        print(f"  [GulfTalent] Found {len(gulftalen_jobs)} listings")
+        for job in gulftalen_jobs:
+            if job["id"] not in seen_jobs and job["id"] not in seen_ids:
+                all_jobs.append(job)
+                seen_ids.add(job["id"])
+
+        dubizzle_jobs = scrape_dubizzle(keyword)
+        print(f"  [Dubizzle] Found {len(dubizzle_jobs)} listings")
+        for job in dubizzle_jobs:
+            if job["id"] not in seen_jobs and job["id"] not in seen_ids:
+                all_jobs.append(job)
+                seen_ids.add(job["id"])
+
+        wuzzuf_jobs = scrape_wuzzuf(keyword)
+        print(f"  [Wuzzuf] Found {len(wuzzuf_jobs)} listings")
         for job in wuzzuf_jobs:
             if job["id"] not in seen_jobs and job["id"] not in seen_ids:
                 all_jobs.append(job)
@@ -300,7 +464,6 @@ def main():
 
         time.sleep(2)
 
-    # Sort by score descending — best matches first
     all_jobs.sort(key=lambda x: x.get("score", 0), reverse=True)
 
     print(f"\nTotal new jobs found: {len(all_jobs)}")
@@ -308,11 +471,9 @@ def main():
     if all_jobs:
         send_jobs_in_chunks(all_jobs[:MAX_JOBS_PER_MESSAGE * 2], len(all_jobs))
         print("[Telegram] Notification sent!")
-
         for job in all_jobs:
             seen_jobs.add(job["id"])
         save_seen_jobs(seen_jobs)
-
     else:
         send_no_jobs_message()
         print("[Telegram] No new jobs notification sent.")
