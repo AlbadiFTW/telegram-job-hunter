@@ -93,13 +93,18 @@ def find_application(company: str):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 <b>JobHunter Bot</b>\n\n"
-        "I help you track your job applications. Here's what I can do:\n\n"
+        "I help you track your job applications.\n\n"
+        "<b>📝 MANAGE APPLICATIONS</b>\n"
         "/applied &lt;company&gt; &lt;role&gt; — Log a new application\n"
+        "/edit &lt;company&gt; &lt;field&gt; &lt;value&gt; — Edit role, status, or notes\n"
+        "/delete &lt;company&gt; — Remove an application\n\n"
+        "<b>📊 UPDATE STATUS</b>\n"
         "/interview &lt;company&gt; — Mark as interview stage\n"
         "/rejected &lt;company&gt; — Mark as rejected\n"
-        "/offer &lt;company&gt; — Mark as offer received 🎉\n"
+        "/offer &lt;company&gt; — Mark as offer received 🎉\n\n"
+        "<b>📈 VIEW DATA</b>\n"
         "/stats — View all-time stats\n"
-        "/list — View this week's applications\n"
+        "/list — View this week's applications\n\n"
         "/help — Show this message",
         parse_mode="HTML"
     )
@@ -274,6 +279,84 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❌ Usage: /delete <company>", parse_mode="HTML")
+        return
+
+    company = " ".join(context.args)
+    app = find_application(company)
+
+    if not app:
+        await update.message.reply_text(
+            f"❌ No application found for <b>{company}</b>.",
+            parse_mode="HTML"
+        )
+        return
+
+    requests.delete(
+        f"{SUPABASE_URL}/rest/v1/applications?id=eq.{app['id']}",
+        headers=SUPABASE_HEADERS,
+        timeout=10
+    )
+
+    await update.message.reply_text(
+        f"🗑 <b>Application deleted</b>\n\n"
+        f"🏢 {app['company']} — {app['role']}",
+        parse_mode="HTML"
+    )
+
+
+async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 3:
+        await update.message.reply_text(
+            "❌ Usage: /edit &lt;company&gt; &lt;field&gt; &lt;value&gt;\n\n"
+            "Fields: role, status, notes\n"
+            "Status values: applied, interview, rejected, offer\n\n"
+            "Examples:\n"
+            "/edit Noon role Backend Engineer\n"
+            "/edit Noon status interview",
+            parse_mode="HTML"
+        )
+        return
+
+    company = context.args[0]
+    field = context.args[1].lower()
+    value = " ".join(context.args[2:])
+
+    if field not in ["role", "status", "notes"]:
+        await update.message.reply_text(
+            "❌ Invalid field. Use: role, status, or notes",
+            parse_mode="HTML"
+        )
+        return
+
+    if field == "status" and value not in ["applied", "interview", "rejected", "offer"]:
+        await update.message.reply_text(
+            "❌ Invalid status. Use: applied, interview, rejected, offer",
+            parse_mode="HTML"
+        )
+        return
+
+    app = find_application(company)
+
+    if not app:
+        await update.message.reply_text(
+            f"❌ No application found for <b>{company}</b>.",
+            parse_mode="HTML"
+        )
+        return
+
+    db_update(app["id"], {field: value})
+
+    await update.message.reply_text(
+        f"✏️ <b>Application updated</b>\n\n"
+        f"🏢 {app['company']}\n"
+        f"📝 {field} → {value}",
+        parse_mode="HTML"
+    )
+
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -286,6 +369,8 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("applied", cmd_applied))
+    app.add_handler(CommandHandler("edit", cmd_edit))
+    app.add_handler(CommandHandler("delete", cmd_delete))
     app.add_handler(CommandHandler("interview", cmd_interview))
     app.add_handler(CommandHandler("rejected", cmd_rejected))
     app.add_handler(CommandHandler("offer", cmd_offer))
