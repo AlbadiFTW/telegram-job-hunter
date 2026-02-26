@@ -196,7 +196,7 @@ def scrape_bayt(keyword):
 def scrape_gulftalen(keyword):
     jobs = []
     query = keyword.replace(" ", "+")
-    url = f"https://www.gulftalen.com/en/jobs/?search={query}&country=UAE"
+    url = f"https://www.gulftalent.com/uae/jobs/search/?search_text={query}"
 
     try:
         response = requests.get(url, headers=HEADERS, timeout=15)
