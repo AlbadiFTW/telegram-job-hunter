@@ -383,16 +383,19 @@ def send_jobs_in_chunks(jobs, total_new):
     for job in jobs:
         job_text = (
             f"💼 <b>{job['title']}</b>\n"
-            f"🏢 {job['company']}\n"
-            f"📍 {job['location']}\n"
-            f"🌐 {job['source']}\n"
-            f"🔗 <a href='{job['url']}'>Apply Now</a>\n\n"
+            f"• 🏢 {job['company']}\n"
+            f"• 📍 {job['location']}\n"
+            f"• 🌐 {job['source']}\n"
+            f"• 🔗 <a href='{job['url']}'>Apply Now</a>\n\n"
         )
 
         if len(current_message) + len(job_text) > TELEGRAM_MAX_CHARS:
             send_telegram_message(current_message)
             time.sleep(TELEGRAM_SEND_DELAY_SEC)
-            current_message = "🚀 <b>Job Alert (continued)</b>\n\n"
+            current_message = (
+                "🚀 <b>Job Alert (continued)</b>\n"
+                f"{'─' * 30}\n\n"
+            )
 
         current_message += job_text
 
@@ -404,7 +407,7 @@ def send_no_jobs_message():
     date_str = datetime.now().strftime("%d %b %Y")
     send_telegram_message(
         f"📭 <b>Job Alert — {date_str}</b>\n\n"
-        "No new jobs found today matching your profile.\n"
+        "No new jobs found today matching your profile.\n\n"
         "Keep your applications going — new listings appear daily!"
     )
 

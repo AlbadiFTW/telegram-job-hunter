@@ -64,9 +64,11 @@ def main():
 
     if not apps:
         send_telegram_message(
-            "📊 <b>Weekly Summary</b>\n\n"
-            "No applications logged yet this week.\n"
-            "Use /applied to start tracking your applications!"
+            "📊 <b>Weekly Summary</b>\n"
+            f"Week ending {datetime.now().strftime('%d %b %Y')}\n"
+            f"{'─' * 30}\n\n"
+            "No applications logged yet this week.\n\n"
+            "Start with:\n<code>/applied &lt;company&gt; &lt;role&gt;</code>"
         )
         return
 
@@ -91,17 +93,19 @@ def main():
         f"📊 <b>Weekly Job Hunt Summary</b>\n"
         f"Week ending {datetime.now().strftime('%d %b %Y')}\n"
         f"{'─' * 30}\n\n"
-        f"<b>This week:</b> {this_week_count} applications\n"
-        f"<b>All time:</b> {total} applications\n\n"
-        f"🎯 Interviews: {interviews}\n"
-        f"❌ Rejections: {rejected}\n"
-        f"🎉 Offers: {offers}\n"
-        f"⏳ Pending: {pending}\n"
-        f"📈 Interview rate: {interview_rate}%\n\n"
+        f"<b>Totals</b>\n"
+        f"• This week: {this_week_count} applications\n"
+        f"• All time: {total} applications\n\n"
+        f"<b>Outcomes</b>\n"
+        f"• 🎯 Interviews: {interviews}\n"
+        f"• ❌ Rejections: {rejected}\n"
+        f"• 🎉 Offers: {offers}\n"
+        f"• ⏳ Pending: {pending}\n"
+        f"• 📈 Interview rate: {interview_rate}%\n\n"
     )
 
     if week_list:
-        message += f"<b>This week's applications:</b>\n{week_list}\n"
+        message += f"<b>This week's applications</b>\n{week_list}\n"
 
     if this_week_count < 10:
         message += f"💡 <i>Target: 10 applications/day. You sent {this_week_count} this week — keep pushing!</i>\n"

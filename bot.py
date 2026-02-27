@@ -92,20 +92,20 @@ def find_application(company: str):
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 <b>JobHunter Bot</b>\n\n"
-        "I help you track your job applications.\n\n"
-        "<b>📝 MANAGE APPLICATIONS</b>\n"
-        "/applied &lt;company&gt; &lt;role&gt; — Log a new application\n"
-        "/edit &lt;company&gt; &lt;field&gt; &lt;value&gt; — Edit role, status, or notes\n"
-        "/delete &lt;company&gt; — Remove an application\n\n"
-        "<b>📊 UPDATE STATUS</b>\n"
-        "/interview &lt;company&gt; — Mark as interview stage\n"
-        "/rejected &lt;company&gt; — Mark as rejected\n"
-        "/offer &lt;company&gt; — Mark as offer received 🎉\n\n"
-        "<b>📈 VIEW DATA</b>\n"
-        "/stats — View all-time stats\n"
-        "/list — View this week's applications\n\n"
-        "/help — Show this message",
+        "👋 <b>JobHunter Bot</b>\n"
+        "Track your job applications quickly.\n\n"
+        "<b>📝 Manage applications</b>\n"
+        "• <code>/applied &lt;company&gt; &lt;role&gt;</code> — Log a new application\n"
+        "• <code>/edit &lt;company&gt; &lt;field&gt; &lt;value&gt;</code> — Edit role, status, or notes\n"
+        "• <code>/delete &lt;company&gt;</code> — Remove an application\n\n"
+        "<b>📊 Update status</b>\n"
+        "• <code>/interview &lt;company&gt;</code> — Mark as interview stage\n"
+        "• <code>/rejected &lt;company&gt;</code> — Mark as rejected\n"
+        "• <code>/offer &lt;company&gt;</code> — Mark as offer received 🎉\n\n"
+        "<b>📈 View data</b>\n"
+        "• <code>/stats</code> — View all-time stats\n"
+        "• <code>/list</code> — View this week's applications\n\n"
+        "• <code>/help</code> — Show this message",
         parse_mode="HTML"
     )
 
@@ -118,8 +118,10 @@ async def cmd_applied(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if len(args) < 2:
         await update.message.reply_text(
-            "❌ Usage: /applied &lt;company&gt; &lt;role&gt;\n"
-            "Example: /applied Noon 'Full Stack Engineer'",
+            "❌ <b>Usage</b>\n"
+            "<code>/applied &lt;company&gt; &lt;role&gt;</code>\n\n"
+            "<b>Example</b>\n"
+            "<code>/applied Noon Full Stack Engineer</code>",
             parse_mode="HTML"
         )
         return
@@ -143,7 +145,10 @@ async def cmd_applied(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_interview(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("❌ Usage: /interview &lt;company&gt;", parse_mode="HTML")
+        await update.message.reply_text(
+            "❌ <b>Usage</b>\n<code>/interview &lt;company&gt;</code>",
+            parse_mode="HTML"
+        )
         return
 
     company = " ".join(context.args)
@@ -151,7 +156,9 @@ async def cmd_interview(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not app:
         await update.message.reply_text(
-            f"❌ No application found for <b>{company}</b>.\nLog it first with /applied",
+            f"❌ <b>No application found</b>\n"
+            f"Company: <b>{company}</b>\n\n"
+            f"Log it first with:\n<code>/applied &lt;company&gt; &lt;role&gt;</code>",
             parse_mode="HTML"
         )
         return
@@ -168,14 +175,21 @@ async def cmd_interview(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_rejected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("❌ Usage: /rejected &lt;company&gt;", parse_mode="HTML")
+        await update.message.reply_text(
+            "❌ <b>Usage</b>\n<code>/rejected &lt;company&gt;</code>",
+            parse_mode="HTML"
+        )
         return
 
     company = " ".join(context.args)
     app = find_application(company)
 
     if not app:
-        await update.message.reply_text(f"❌ No application found for <b>{company}</b>.", parse_mode="HTML")
+        await update.message.reply_text(
+            f"❌ <b>No application found</b>\n"
+            f"Company: <b>{company}</b>",
+            parse_mode="HTML"
+        )
         return
 
     db_update(app["id"], {"status": "rejected"})
@@ -194,14 +208,21 @@ async def cmd_rejected(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("❌ Usage: /offer &lt;company&gt;", parse_mode="HTML")
+        await update.message.reply_text(
+            "❌ <b>Usage</b>\n<code>/offer &lt;company&gt;</code>",
+            parse_mode="HTML"
+        )
         return
 
     company = " ".join(context.args)
     app = find_application(company)
 
     if not app:
-        await update.message.reply_text(f"❌ No application found for <b>{company}</b>.", parse_mode="HTML")
+        await update.message.reply_text(
+            f"❌ <b>No application found</b>\n"
+            f"Company: <b>{company}</b>",
+            parse_mode="HTML"
+        )
         return
 
     db_update(app["id"], {"status": "offer"})
@@ -219,7 +240,8 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not all_apps:
         await update.message.reply_text(
-            "📊 No applications logged yet.\nStart with: /applied &lt;company&gt; &lt;role&gt;",
+            "📊 <b>No applications logged yet</b>\n\n"
+            "Start with:\n<code>/applied &lt;company&gt; &lt;role&gt;</code>",
             parse_mode="HTML"
         )
         return
@@ -237,12 +259,14 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📊 <b>Application Stats</b>\n"
         f"{'─' * 25}\n\n"
-        f"📤 Total applied: <b>{total}</b>\n"
-        f"📅 This week: <b>{this_week}</b>\n\n"
-        f"🎯 Interviews: <b>{interviews}</b>\n"
-        f"❌ Rejections: <b>{rejected}</b>\n"
-        f"🎉 Offers: <b>{offers}</b>\n"
-        f"⏳ Pending: <b>{pending}</b>\n\n"
+        f"<b>Totals</b>\n"
+        f"• 📤 Applied: <b>{total}</b>\n"
+        f"• 📅 This week: <b>{this_week}</b>\n\n"
+        f"<b>Outcomes</b>\n"
+        f"• 🎯 Interviews: <b>{interviews}</b>\n"
+        f"• ❌ Rejections: <b>{rejected}</b>\n"
+        f"• 🎉 Offers: <b>{offers}</b>\n"
+        f"• ⏳ Pending: <b>{pending}</b>\n\n"
         f"📈 Interview rate: <b>{interview_rate}%</b>",
         parse_mode="HTML"
     )
@@ -253,7 +277,8 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not all_apps:
         await update.message.reply_text(
-            "📋 No applications logged yet.\nStart with: /applied &lt;company&gt; &lt;role&gt;",
+            "📋 <b>No applications logged yet</b>\n\n"
+            "Start with:\n<code>/applied &lt;company&gt; &lt;role&gt;</code>",
             parse_mode="HTML"
         )
         return
@@ -262,7 +287,11 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     this_week = [a for a in all_apps if datetime.fromisoformat(a["date"]) > week_ago]
 
     if not this_week:
-        await update.message.reply_text("📋 No applications this week yet.")
+        await update.message.reply_text(
+            "📋 <b>No applications this week yet</b>\n\n"
+            "Log one with:\n<code>/applied &lt;company&gt; &lt;role&gt;</code>",
+            parse_mode="HTML"
+        )
         return
 
     status_emoji = {"applied": "📤", "interview": "🎯", "rejected": "❌", "offer": "🎉"}
@@ -270,7 +299,8 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for app in this_week[:15]:
         emoji = status_emoji.get(app.get("status"), "📤")
         date_str = datetime.fromisoformat(app["date"]).strftime("%d %b")
-        lines += f"{emoji} <b>{app['company']}</b> — {app['role']} ({date_str})\n"
+        lines += f"{emoji} <b>{app['company']}</b>\n"
+        lines += f"• {app['role']} — {date_str}\n\n"
 
     await update.message.reply_text(
         f"📋 <b>This Week's Applications ({len(this_week)})</b>\n"
@@ -281,7 +311,10 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("❌ Usage: /delete <company>", parse_mode="HTML")
+        await update.message.reply_text(
+            "❌ <b>Usage</b>\n<code>/delete &lt;company&gt;</code>",
+            parse_mode="HTML"
+        )
         return
 
     company = " ".join(context.args)
@@ -302,7 +335,8 @@ async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"🗑 <b>Application deleted</b>\n\n"
-        f"🏢 {app['company']} — {app['role']}",
+        f"🏢 {app['company']}\n"
+        f"💼 {app['role']}",
         parse_mode="HTML"
     )
 
@@ -310,12 +344,15 @@ async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 3:
         await update.message.reply_text(
-            "❌ Usage: /edit &lt;company&gt; &lt;field&gt; &lt;value&gt;\n\n"
-            "Fields: role, status, notes\n"
-            "Status values: applied, interview, rejected, offer\n\n"
-            "Examples:\n"
-            "/edit Noon role Backend Engineer\n"
-            "/edit Noon status interview",
+            "❌ <b>Usage</b>\n"
+            "<code>/edit &lt;company&gt; &lt;field&gt; &lt;value&gt;</code>\n\n"
+            "<b>Fields</b>\n"
+            "• role\n• status\n• notes\n\n"
+            "<b>Status values</b>\n"
+            "• applied\n• interview\n• rejected\n• offer\n\n"
+            "<b>Examples</b>\n"
+            "<code>/edit Noon role Backend Engineer</code>\n"
+            "<code>/edit Noon status interview</code>",
             parse_mode="HTML"
         )
         return
@@ -326,14 +363,16 @@ async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if field not in ["role", "status", "notes"]:
         await update.message.reply_text(
-            "❌ Invalid field. Use: role, status, or notes",
+            "❌ <b>Invalid field</b>\n"
+            "Use: <code>role</code>, <code>status</code>, or <code>notes</code>",
             parse_mode="HTML"
         )
         return
 
     if field == "status" and value not in ["applied", "interview", "rejected", "offer"]:
         await update.message.reply_text(
-            "❌ Invalid status. Use: applied, interview, rejected, offer",
+            "❌ <b>Invalid status</b>\n"
+            "Use: <code>applied</code>, <code>interview</code>, <code>rejected</code>, <code>offer</code>",
             parse_mode="HTML"
         )
         return

@@ -74,9 +74,9 @@ def main():
     message = (
         f"🧠 <b>Daily Interview Prep — {datetime.now().strftime('%d %b %Y')}</b>\n"
         f"{'─' * 30}\n\n"
-        f"💻 <b>Technical Question:</b>\n"
+        f"💻 <b>Technical Question</b>\n"
         f"{tech_q}\n\n"
-        f"🗣 <b>Behavioural Question:</b>\n"
+        f"🗣 <b>Behavioural Question</b>\n"
         f"{behav_q}\n\n"
         f"<i>Take 2 minutes to think through your answer before reading on today.</i>"
     )
