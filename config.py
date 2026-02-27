@@ -64,6 +64,9 @@ REJECTION_KEYWORDS = [
     "commission", "telesales", "door to door", "odoo functional",
     "emirati", "uae nationals", "national talent", "nationals only",
     "php", "wordpress", "laravel", "saudi nationals", "qatari nationals",
+    "devops", "triage", "kubernetes", "terraform", "argocd", "jenkins", 
+    "sre", "site reliability", "2-4 years", "3-5 years", "4-6 years",
+    "minimum 3", "minimum 4", "minimum 5", "at least 3 years", "at least 4 years",
 ]
 
 # --- Telegram Safety ---
