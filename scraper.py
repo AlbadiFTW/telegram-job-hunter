@@ -1,18 +1,28 @@
 import os
-import requests
+import re
+import html
 import json
 import time
 import hashlib
+import requests
 from datetime import datetime
+from functools import lru_cache
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from config import (
-    SEARCH_KEYWORDS, LOCATIONS,
-    SCORE_BOOST_KEYWORDS, SCORE_PENALTY_KEYWORDS,
-    REJECTION_KEYWORDS, SEEN_JOBS_FILE, MAX_JOBS_PER_MESSAGE,
+    SEARCH_KEYWORDS, LOCATIONS, ENABLED_SOURCES,
+    PRIORITY_LOCATIONS, PRIORITY_LOCATION_BONUS,
+    PREFERRED_COMPANIES, PREFERRED_COMPANY_BONUS,
+    UAE_LOCATION_MARKERS, FOREIGN_LOCATION_MARKERS,
+    EMIRATI_ONLY, EMIRATI_BONUS, EMIRATI_TITLE_KEYWORDS, EMIRATI_DESCRIPTION_KEYWORDS,
+    SCORE_BOOST_KEYWORDS, SCORE_PENALTY_KEYWORDS, SECTOR_TITLE_KEYWORDS,
+    REJECT_TITLE_KEYWORDS, REJECT_ANYWHERE_KEYWORDS,
+    MAX_YEARS_EXPERIENCE, MIN_SALARY_AED_MONTHLY,
+    INDEED_RESULTS_WANTED, INDEED_HOURS_OLD,
+    SEEN_JOBS_FILE, MAX_JOBS_PER_MESSAGE,
     TELEGRAM_MAX_CHARS, TELEGRAM_SEND_DELAY_SEC, MIN_SCORE,
     TELEGRAM_BOT_TOKEN as _CONFIG_TOKEN,
     TELEGRAM_CHAT_ID as _CONFIG_CHAT_ID,
@@ -30,6 +40,25 @@ HEADERS = {
 
 
 # ============================================================
+# HTTP HELPER (retries on rate-limits / server errors)
+# ============================================================
+
+def http_get(url, retries=2):
+    for attempt in range(retries + 1):
+        try:
+            response = requests.get(url, headers=HEADERS, timeout=15)
+        except requests.RequestException as e:
+            print(f"  [HTTP] {e}")
+            time.sleep(2)
+            continue
+        if response.status_code in (429, 500, 502, 503, 504) and attempt < retries:
+            time.sleep(5 * (attempt + 1))
+            continue
+        return response
+    return None
+
+
+# ============================================================
 # SEEN JOBS TRACKER
 # ============================================================
 
@@ -42,7 +71,7 @@ def load_seen_jobs():
 
 def save_seen_jobs(seen):
     with open(SEEN_JOBS_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(seen), f)
+        json.dump(sorted(seen), f)
 
 
 def make_job_id(title, company):
@@ -51,88 +80,244 @@ def make_job_id(title, company):
 
 
 # ============================================================
+# TEXT MATCHING HELPERS
+# ============================================================
+
+@lru_cache(maxsize=None)
+def _pattern(phrase):
+    # whole-word / whole-phrase match, so "sap" doesn't hit "Sapphire"
+    return re.compile(r"(?<![a-z0-9])" + re.escape(phrase.strip().lower()) + r"(?![a-z0-9])")
+
+
+def has(text, phrase):
+    return _pattern(phrase).search(text) is not None
+
+
+def has_any(text, phrases):
+    return any(has(text, p) for p in phrases)
+
+
+_NON_EMIRATI_RE = re.compile(r"\bnon[\s-]?(emirati|uae national)s?\b")
+_YEARS_RE = re.compile(r"(\d{1,2})\s*(?:\+|\s*(?:-|–|—|to)\s*\d{1,2}\s*\+?)?\s*(?:years?|yrs?)\b")
+
+
+def min_years_required(text):
+    """Smallest 'N years' figure that sits next to the word 'experience', or None."""
+    found = []
+    for m in _YEARS_RE.finditer(text):
+        window = text[max(0, m.start() - 60): m.end() + 60]
+        if "experience" in window:
+            found.append(int(m.group(1)))
+    return min(found) if found else None
+
+
+# ============================================================
+# LOCATION / SALARY FILTERS
+# ============================================================
+
+def is_uae_location(location):
+    """UAE-only filter. All sources are searched with a UAE scope already, so an
+    unknown/empty location is accepted — but anything naming another country is not."""
+    loc = (location or "").lower()
+    if has_any(loc, UAE_LOCATION_MARKERS):
+        return True
+    if has_any(loc, FOREIGN_LOCATION_MARKERS):
+        return False
+    return True
+
+
+def _s(x, default=""):
+    """str() that turns None / NaN (pandas) into a default instead of the text 'nan'."""
+    if x is None or (isinstance(x, float) and x != x):
+        return default
+    return str(x)
+
+
+def _num(x):
+    try:
+        v = float(x)
+        return v if v == v else None   # NaN -> None
+    except (TypeError, ValueError):
+        return None
+
+
+def monthly_aed(amount, interval, currency):
+    """Convert a listed salary to AED/month. Returns None if not convertible."""
+    amount = _num(amount)
+    if amount is None or (currency and str(currency).upper() != "AED"):
+        return None
+    interval = str(interval or "").lower()
+    factors = {"monthly": 1, "yearly": 1 / 12, "weekly": 4.33, "daily": 22, "hourly": 22 * 8}
+    return amount * factors[interval] if interval in factors else None
+
+
+def salary_below_floor(job):
+    if not MIN_SALARY_AED_MONTHLY:
+        return False
+    top = monthly_aed(job.get("max_amount") or job.get("min_amount"),
+                      job.get("interval"), job.get("currency"))
+    return top is not None and top < MIN_SALARY_AED_MONTHLY
+
+
+def salary_text(job):
+    lo, hi = _num(job.get("min_amount")), _num(job.get("max_amount"))
+    if lo is None and hi is None:
+        return ""
+    cur = job.get("currency") or ""
+    rng = f"{lo:,.0f}–{hi:,.0f}" if lo and hi and lo != hi else f"{(hi or lo):,.0f}"
+    return f"{rng} {cur} / {job.get('interval') or '?'}".strip()
+
+
+# ============================================================
 # RELEVANCE SCORING
 # ============================================================
 
-def score_job(title, description=""):
+def evaluate_job(raw):
+    """Returns the job dict enriched with score/flags, or None if it should be skipped."""
+    title = (raw.get("title") or "").strip()
+    if not title:
+        return None
+    description = raw.get("description") or ""
+    company = raw.get("company") or "Unknown"
+    location = raw.get("location") or "UAE"
+
+    title_l = title.lower()
     text = f"{title} {description}".lower()
 
-    for keyword in REJECTION_KEYWORDS:
-        if keyword.lower() in text:
-            return -99
+    # --- hard rejects ---
+    if not is_uae_location(location):
+        return None
+    if has_any(title_l, REJECT_TITLE_KEYWORDS) or has_any(text, REJECT_ANYWHERE_KEYWORDS):
+        return None
+    if salary_below_floor(raw):
+        return None
 
+    years = min_years_required(text)
+    if years is not None and years > MAX_YEARS_EXPERIENCE:
+        return None
+
+    # --- Emirati-targeted roles ---
+    title_nat = _NON_EMIRATI_RE.sub(" ", title_l)
+    desc_nat = _NON_EMIRATI_RE.sub(" ", description.lower())
+    emirati = has_any(title_nat, EMIRATI_TITLE_KEYWORDS) or has_any(desc_nat, EMIRATI_DESCRIPTION_KEYWORDS)
+    if EMIRATI_ONLY and not emirati:
+        return None
+
+    # --- score ---
     score = 0
+    score += sum(b for kw, b in SCORE_BOOST_KEYWORDS if has(text, kw))
+    score += sum(1 for kw in SECTOR_TITLE_KEYWORDS if has(title_l, kw))
+    score += sum(p for kw, p in SCORE_PENALTY_KEYWORDS if has(title_l, kw))
+    if years == MAX_YEARS_EXPERIENCE:
+        score -= 1
+    if emirati:
+        score += EMIRATI_BONUS
 
-    for keyword, boost in SCORE_BOOST_KEYWORDS:
-        if keyword.lower() in text:
-            score += boost
+    loc_l = f"{location} {title}".lower()
+    al_ain = any(p in loc_l for p in PRIORITY_LOCATIONS)
+    if al_ain:
+        score += PRIORITY_LOCATION_BONUS
+    if has_any(company.lower(), PREFERRED_COMPANIES):
+        score += PREFERRED_COMPANY_BONUS
 
-    for keyword, penalty in SCORE_PENALTY_KEYWORDS:
-        if keyword.lower() in text:
-            score += penalty
+    if score < MIN_SCORE:
+        return None
 
-    return score
-
-
-def is_relevant(title, description=""):
-    return score_job(title, description) >= MIN_SCORE
+    return {
+        "title": title,
+        "company": company,
+        "location": location,
+        "url": raw.get("url", ""),
+        "source": raw.get("source", ""),
+        "score": score,
+        "emirati": emirati,
+        "al_ain": al_ain,
+        "salary": salary_text(raw),
+        "id": make_job_id(title, company),
+    }
 
 
 # ============================================================
-# LINKEDIN SCRAPER — removed experience filter to catch more roles
+# LINKEDIN SCRAPER
 # ============================================================
 
-def scrape_linkedin(keyword, location="United Arab Emirates"):
+def scrape_linkedin(keyword, location):
     jobs = []
     query = keyword.replace(" ", "%20")
     loc = location.replace(" ", "%20")
-    # Removed f_E=1%2C2 (entry level filter) — catches more junior roles
     url = (
         f"https://www.linkedin.com/jobs/search/"
         f"?keywords={query}&location={loc}&f_TPR=r86400"
     )
 
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        if response.status_code != 200:
-            print(f"  [LinkedIn] Failed '{keyword}' in {location} — {response.status_code}")
-            return jobs
+    response = http_get(url)
+    if response is None or response.status_code != 200:
+        code = response.status_code if response is not None else "no response"
+        print(f"  [LinkedIn] Failed '{keyword}' in {location} — {code}")
+        return jobs
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        listings = soup.find_all("div", {"class": "base-card"})
-
-        for listing in listings[:20]:
-            try:
-                title_tag = listing.find("h3", {"class": "base-search-card__title"})
-                company_tag = listing.find("h4", {"class": "base-search-card__subtitle"})
-                location_tag = listing.find("span", {"class": "job-search-card__location"})
-                link_tag = listing.find("a", {"class": "base-card__full-link"})
-
-                if not title_tag or not link_tag:
-                    continue
-
-                title = title_tag.get_text(strip=True)
-                company = company_tag.get_text(strip=True) if company_tag else "Unknown"
-                loc_text = location_tag.get_text(strip=True) if location_tag else location
-                link = link_tag["href"].split("?")[0]
-
-                if is_relevant(title):
-                    jobs.append({
-                        "title": title,
-                        "company": company,
-                        "location": loc_text,
-                        "url": link,
-                        "source": "LinkedIn",
-                        "score": score_job(title),
-                        "id": make_job_id(title, company)
-                    })
-
-            except Exception:
+    soup = BeautifulSoup(response.text, "html.parser")
+    for listing in soup.find_all("div", {"class": "base-card"})[:25]:
+        try:
+            title_tag = listing.find("h3", {"class": "base-search-card__title"})
+            company_tag = listing.find("h4", {"class": "base-search-card__subtitle"})
+            location_tag = listing.find("span", {"class": "job-search-card__location"})
+            link_tag = listing.find("a", {"class": "base-card__full-link"})
+            if not title_tag or not link_tag:
                 continue
+            jobs.append({
+                "title": title_tag.get_text(strip=True),
+                "company": company_tag.get_text(strip=True) if company_tag else "Unknown",
+                "location": location_tag.get_text(strip=True) if location_tag else "",
+                "url": link_tag["href"].split("?")[0],
+                "source": "LinkedIn",
+            })
+        except Exception:
+            continue
+    return jobs
 
+
+# ============================================================
+# INDEED SCRAPER (via python-jobspy — Indeed blocks plain requests)
+# ============================================================
+
+def scrape_indeed(keyword, location):
+    try:
+        from jobspy import scrape_jobs
+    except ImportError:
+        print("  [Indeed] python-jobspy not installed — skipping (pip install python-jobspy)")
+        return []
+
+    short_location = location.split(",")[0].strip()   # "Al Ain, Abu Dhabi, ..." -> "Al Ain"
+    try:
+        df = scrape_jobs(
+            site_name=["indeed"],
+            search_term=keyword,
+            location=short_location,
+            country_indeed="UAE",
+            results_wanted=INDEED_RESULTS_WANTED,
+            hours_old=INDEED_HOURS_OLD,
+            description_format="markdown",
+            verbose=0,
+        )
     except Exception as e:
-        print(f"  [LinkedIn] Error: {e}")
+        print(f"  [Indeed] Error '{keyword}' in {short_location}: {e}")
+        return []
 
+    jobs = []
+    for row in df.to_dict("records"):
+        jobs.append({
+            "title": _s(row.get("title")),
+            "company": _s(row.get("company"), "Unknown"),
+            "location": _s(row.get("location")),
+            "url": _s(row.get("job_url")),
+            "description": _s(row.get("description")),
+            "min_amount": row.get("min_amount"),
+            "max_amount": row.get("max_amount"),
+            "interval": row.get("interval"),
+            "currency": row.get("currency"),
+            "source": "Indeed",
+        })
     return jobs
 
 
@@ -140,106 +325,78 @@ def scrape_linkedin(keyword, location="United Arab Emirates"):
 # BAYT SCRAPER
 # ============================================================
 
-def scrape_bayt(keyword):
+def scrape_bayt(keyword, location):
     jobs = []
-    query = keyword.strip().lower().replace(" ", "-")
-    url = f"https://www.bayt.com/en/uae/jobs/{query}-jobs/"
+    slug = re.sub(r"[^a-z0-9]+", "-", keyword.lower()).strip("-")
+    if location.lower().startswith("al ain"):
+        url = f"https://www.bayt.com/en/uae/jobs/{slug}-jobs-in-al-ain/"
+    else:
+        url = f"https://www.bayt.com/en/uae/jobs/{slug}-jobs/"
 
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        if response.status_code != 200:
-            print(f"  [Bayt] Failed '{keyword}' — {response.status_code}")
-            return jobs
+    response = http_get(url)
+    if response is None or response.status_code != 200:
+        code = response.status_code if response is not None else "no response"
+        print(f"  [Bayt] Failed '{keyword}' ({location.split(',')[0]}) — {code}")
+        return jobs
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        listings = soup.find_all("li", {"class": lambda c: c and "has-pointer-d" in c})
-
-        for listing in listings[:20]:
-            try:
-                title_tag = listing.find("h2", {"class": "m0 t-regular"})
-                company_tag = listing.find("b", {"class": "t-default"})
-                location_tag = listing.find("span", {"class": "t-mute"})
-                link_tag = listing.find("a", href=True)
-
-                if not title_tag or not link_tag:
-                    continue
-
-                title = title_tag.get_text(strip=True)
-                company = company_tag.get_text(strip=True) if company_tag else "Unknown"
-                location = location_tag.get_text(strip=True) if location_tag else "UAE"
-                link = "https://www.bayt.com" + link_tag["href"] if link_tag["href"].startswith("/") else link_tag["href"]
-
-                if is_relevant(title):
-                    jobs.append({
-                        "title": title,
-                        "company": company,
-                        "location": location,
-                        "url": link,
-                        "source": "Bayt",
-                        "score": score_job(title),
-                        "id": make_job_id(title, company)
-                    })
-
-            except Exception:
+    soup = BeautifulSoup(response.text, "html.parser")
+    listings = soup.find_all("li", {"class": lambda c: c and "has-pointer-d" in c})
+    for listing in listings[:25]:
+        try:
+            title_tag = listing.find("h2", {"class": "m0 t-regular"})
+            company_tag = listing.find("b", {"class": "t-default"})
+            location_tag = listing.find("span", {"class": "t-mute"})
+            link_tag = listing.find("a", href=True)
+            if not title_tag or not link_tag:
                 continue
-
-    except Exception as e:
-        print(f"  [Bayt] Error: {e}")
-
+            href = link_tag["href"]
+            jobs.append({
+                "title": title_tag.get_text(strip=True),
+                "company": company_tag.get_text(strip=True) if company_tag else "Unknown",
+                "location": location_tag.get_text(strip=True) if location_tag else "",
+                "url": "https://www.bayt.com" + href if href.startswith("/") else href,
+                "source": "Bayt",
+            })
+        except Exception:
+            continue
     return jobs
 
 
 # ============================================================
-# GULFTALEN SCRAPER
+# GULFTALENT SCRAPER
 # ============================================================
 
-def scrape_gulftalen(keyword):
+def scrape_gulftalent(keyword):
     jobs = []
     query = keyword.replace(" ", "+")
     url = f"https://www.gulftalent.com/uae/jobs/search/?search_text={query}"
 
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        if response.status_code != 200:
-            print(f"  [GulfTalent] Failed '{keyword}' — {response.status_code}")
-            return jobs
+    response = http_get(url)
+    if response is None or response.status_code != 200:
+        code = response.status_code if response is not None else "no response"
+        print(f"  [GulfTalent] Failed '{keyword}' — {code}")
+        return jobs
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        listings = soup.find_all("div", {"class": "job-item"})
-
-        for listing in listings[:20]:
-            try:
-                title_tag = listing.find("h3")
-                company_tag = listing.find("span", {"class": "company"})
-                location_tag = listing.find("span", {"class": "location"})
-                link_tag = listing.find("a", href=True)
-
-                if not title_tag or not link_tag:
-                    continue
-
-                title = title_tag.get_text(strip=True)
-                company = company_tag.get_text(strip=True) if company_tag else "Unknown"
-                location = location_tag.get_text(strip=True) if location_tag else "UAE"
-                href = link_tag["href"]
-                link = "https://www.gulftalen.com" + href if href.startswith("/") else href
-
-                if is_relevant(title):
-                    jobs.append({
-                        "title": title,
-                        "company": company,
-                        "location": location,
-                        "url": link,
-                        "source": "GulfTalent",
-                        "score": score_job(title),
-                        "id": make_job_id(title, company)
-                    })
-
-            except Exception:
+    soup = BeautifulSoup(response.text, "html.parser")
+    for listing in soup.find_all("div", {"class": "job-item"})[:25]:
+        try:
+            title_tag = listing.find("h3")
+            company_tag = listing.find("span", {"class": "company"})
+            location_tag = listing.find("span", {"class": "location"})
+            link_tag = listing.find("a", href=True)
+            if not title_tag or not link_tag:
                 continue
-
-    except Exception as e:
-        print(f"  [GulfTalent] Error: {e}")
-
+            href = link_tag["href"]
+            jobs.append({
+                "title": title_tag.get_text(strip=True),
+                "company": company_tag.get_text(strip=True) if company_tag else "Unknown",
+                "location": location_tag.get_text(strip=True) if location_tag else "",
+                # NOTE: the old code had a typo here ("gulftalen.com") which broke every link
+                "url": "https://www.gulftalent.com" + href if href.startswith("/") else href,
+                "source": "GulfTalent",
+            })
+        except Exception:
+            continue
     return jobs
 
 
@@ -252,101 +409,31 @@ def scrape_dubizzle(keyword):
     query = keyword.replace(" ", "%20")
     url = f"https://uae.dubizzle.com/jobs/?search={query}"
 
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        if response.status_code != 200:
-            print(f"  [Dubizzle] Failed '{keyword}' — {response.status_code}")
-            return jobs
+    response = http_get(url)
+    if response is None or response.status_code != 200:
+        code = response.status_code if response is not None else "no response"
+        print(f"  [Dubizzle] Failed '{keyword}' — {code}")
+        return jobs
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        listings = soup.find_all("article")
-
-        for listing in listings[:20]:
-            try:
-                title_tag = listing.find("h2") or listing.find("h3")
-                company_tag = listing.find("span", {"class": lambda c: c and "company" in str(c).lower()})
-                location_tag = listing.find("span", {"class": lambda c: c and "location" in str(c).lower()})
-                link_tag = listing.find("a", href=True)
-
-                if not title_tag or not link_tag:
-                    continue
-
-                title = title_tag.get_text(strip=True)
-                company = company_tag.get_text(strip=True) if company_tag else "Unknown"
-                location = location_tag.get_text(strip=True) if location_tag else "UAE"
-                href = link_tag["href"]
-                link = "https://uae.dubizzle.com" + href if href.startswith("/") else href
-
-                if is_relevant(title):
-                    jobs.append({
-                        "title": title,
-                        "company": company,
-                        "location": location,
-                        "url": link,
-                        "source": "Dubizzle",
-                        "score": score_job(title),
-                        "id": make_job_id(title, company)
-                    })
-
-            except Exception:
+    soup = BeautifulSoup(response.text, "html.parser")
+    for listing in soup.find_all("article")[:25]:
+        try:
+            title_tag = listing.find("h2") or listing.find("h3")
+            company_tag = listing.find("span", {"class": lambda c: c and "company" in str(c).lower()})
+            location_tag = listing.find("span", {"class": lambda c: c and "location" in str(c).lower()})
+            link_tag = listing.find("a", href=True)
+            if not title_tag or not link_tag:
                 continue
-
-    except Exception as e:
-        print(f"  [Dubizzle] Error: {e}")
-
-    return jobs
-
-
-# ============================================================
-# WUZZUF SCRAPER
-# ============================================================
-
-def scrape_wuzzuf(keyword):
-    jobs = []
-    query = keyword.replace(" ", "+")
-    url = f"https://wuzzuf.net/search/jobs/?q={query}&a=hpb"
-
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        if response.status_code != 200:
-            print(f"  [Wuzzuf] Failed '{keyword}' — {response.status_code}")
-            return jobs
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        listings = soup.find_all("div", {"class": "css-1gatmva"})
-
-        for listing in listings[:20]:
-            try:
-                title_tag = listing.find("h2", {"class": "css-m604qf"})
-                company_tag = listing.find("a", {"class": "css-17s97q8"})
-                location_tag = listing.find("span", {"class": "css-5wys0k"})
-                link_tag = title_tag.find("a") if title_tag else None
-
-                if not title_tag or not link_tag:
-                    continue
-
-                title = title_tag.get_text(strip=True)
-                company = company_tag.get_text(strip=True) if company_tag else "Unknown"
-                loc_text = location_tag.get_text(strip=True) if location_tag else "UAE"
-                link = "https://wuzzuf.net" + link_tag["href"] if link_tag["href"].startswith("/") else link_tag["href"]
-
-                if is_relevant(title):
-                    jobs.append({
-                        "title": title,
-                        "company": company,
-                        "location": loc_text,
-                        "url": link,
-                        "source": "Wuzzuf",
-                        "score": score_job(title),
-                        "id": make_job_id(title, company)
-                    })
-
-            except Exception:
-                continue
-
-    except Exception as e:
-        print(f"  [Wuzzuf] Error: {e}")
-
+            href = link_tag["href"]
+            jobs.append({
+                "title": title_tag.get_text(strip=True),
+                "company": company_tag.get_text(strip=True) if company_tag else "Unknown",
+                "location": location_tag.get_text(strip=True) if location_tag else "",
+                "url": "https://uae.dubizzle.com" + href if href.startswith("/") else href,
+                "source": "Dubizzle",
+            })
+        except Exception:
+            continue
     return jobs
 
 
@@ -366,31 +453,49 @@ def send_telegram_message(text):
         response = requests.post(url, json=payload, timeout=10)
         if response.status_code != 200:
             print(f"[Telegram] Failed: {response.text}")
+            return False
+        return True
     except Exception as e:
         print(f"[Telegram] Error: {e}")
+        return False
+
+
+def format_job(job):
+    badges = ""
+    if job.get("emirati"):
+        badges += " 🇦🇪"
+    if job.get("al_ain"):
+        badges += " ⭐"
+    lines = [
+        f"💼 <b>{html.escape(job['title'])}</b>{badges}",
+        f"• 🏢 {html.escape(job['company'])}",
+        f"• 📍 {html.escape(job['location'])}",
+    ]
+    if job.get("salary"):
+        lines.append(f"• 💰 {html.escape(job['salary'])}")
+    lines.append(f"• 🌐 {html.escape(job['source'])}")
+    lines.append(f"• 🔗 <a href=\"{html.escape(job['url'], quote=True)}\">Apply Now</a>")
+    return "\n".join(lines) + "\n\n"
 
 
 def send_jobs_in_chunks(jobs, total_new):
+    """Returns True only if every message was delivered."""
     date_str = datetime.now().strftime("%d %b %Y")
     header = (
         f"🚀 <b>Job Alert — {date_str}</b>\n"
         f"Found <b>{total_new} new jobs</b> matching your profile\n"
+        f"🇦🇪 = Emirati-targeted   ⭐ = Al Ain\n"
         f"{'─' * 30}\n\n"
     )
 
+    ok = True
     current_message = header
 
     for job in jobs:
-        job_text = (
-            f"💼 <b>{job['title']}</b>\n"
-            f"• 🏢 {job['company']}\n"
-            f"• 📍 {job['location']}\n"
-            f"• 🌐 {job['source']}\n"
-            f"• 🔗 <a href='{job['url']}'>Apply Now</a>\n\n"
-        )
+        job_text = format_job(job)
 
         if len(current_message) + len(job_text) > TELEGRAM_MAX_CHARS:
-            send_telegram_message(current_message)
+            ok = send_telegram_message(current_message) and ok
             time.sleep(TELEGRAM_SEND_DELAY_SEC)
             current_message = (
                 "🚀 <b>Job Alert (continued)</b>\n"
@@ -400,7 +505,8 @@ def send_jobs_in_chunks(jobs, total_new):
         current_message += job_text
 
     current_message += "\n💪 Good luck Abdul Rahman!"
-    send_telegram_message(current_message)
+    ok = send_telegram_message(current_message) and ok
+    return ok
 
 
 def send_no_jobs_message():
@@ -422,61 +528,54 @@ def main():
     print(f"{'='*50}\n")
 
     seen_jobs = load_seen_jobs()
-    all_jobs = []
-    seen_ids = set()
+    candidates = {}   # job id -> job
+
+    def collect(label, raw_jobs):
+        kept = 0
+        for raw in raw_jobs:
+            job = evaluate_job(raw)
+            if not job or job["id"] in seen_jobs:
+                continue
+            existing = candidates.get(job["id"])
+            if existing is None or job["score"] > existing["score"]:
+                candidates[job["id"]] = job
+            kept += 1
+        print(f"  [{label}] {len(raw_jobs)} scraped, {kept} relevant")
 
     for keyword in SEARCH_KEYWORDS:
         print(f"Searching: '{keyword}'...")
 
         for location in LOCATIONS:
-            linkedin_jobs = scrape_linkedin(keyword, location)
-            print(f"  [LinkedIn] '{location}' — {len(linkedin_jobs)} listings")
-            for job in linkedin_jobs:
-                if job["id"] not in seen_jobs and job["id"] not in seen_ids:
-                    all_jobs.append(job)
-                    seen_ids.add(job["id"])
-            time.sleep(3)
+            short = location.split(",")[0]
+            if ENABLED_SOURCES.get("linkedin"):
+                collect(f"LinkedIn/{short}", scrape_linkedin(keyword, location))
+                time.sleep(3)
+            if ENABLED_SOURCES.get("indeed"):
+                collect(f"Indeed/{short}", scrape_indeed(keyword, location))
+                time.sleep(2)
+            if ENABLED_SOURCES.get("bayt"):
+                collect(f"Bayt/{short}", scrape_bayt(keyword, location))
 
-        bayt_jobs = scrape_bayt(keyword)
-        print(f"  [Bayt] Found {len(bayt_jobs)} listings")
-        for job in bayt_jobs:
-            if job["id"] not in seen_jobs and job["id"] not in seen_ids:
-                all_jobs.append(job)
-                seen_ids.add(job["id"])
-
-        gulftalen_jobs = scrape_gulftalen(keyword)
-        print(f"  [GulfTalent] Found {len(gulftalen_jobs)} listings")
-        for job in gulftalen_jobs:
-            if job["id"] not in seen_jobs and job["id"] not in seen_ids:
-                all_jobs.append(job)
-                seen_ids.add(job["id"])
-
-        dubizzle_jobs = scrape_dubizzle(keyword)
-        print(f"  [Dubizzle] Found {len(dubizzle_jobs)} listings")
-        for job in dubizzle_jobs:
-            if job["id"] not in seen_jobs and job["id"] not in seen_ids:
-                all_jobs.append(job)
-                seen_ids.add(job["id"])
-
-        wuzzuf_jobs = scrape_wuzzuf(keyword)
-        print(f"  [Wuzzuf] Found {len(wuzzuf_jobs)} listings")
-        for job in wuzzuf_jobs:
-            if job["id"] not in seen_jobs and job["id"] not in seen_ids:
-                all_jobs.append(job)
-                seen_ids.add(job["id"])
+        if ENABLED_SOURCES.get("gulftalent"):
+            collect("GulfTalent", scrape_gulftalent(keyword))
+        if ENABLED_SOURCES.get("dubizzle"):
+            collect("Dubizzle", scrape_dubizzle(keyword))
 
         time.sleep(2)
 
-    all_jobs.sort(key=lambda x: x.get("score", 0), reverse=True)
-
+    all_jobs = sorted(candidates.values(), key=lambda j: j["score"], reverse=True)
     print(f"\nTotal new jobs found: {len(all_jobs)}")
 
     if all_jobs:
-        send_jobs_in_chunks(all_jobs[:MAX_JOBS_PER_MESSAGE * 2], len(all_jobs))
-        print("[Telegram] Notification sent!")
-        for job in all_jobs:
-            seen_jobs.add(job["id"])
-        save_seen_jobs(seen_jobs)
+        to_send = all_jobs[:MAX_JOBS_PER_MESSAGE * 2]
+        if send_jobs_in_chunks(to_send, len(all_jobs)):
+            print(f"[Telegram] Notification sent ({len(to_send)} jobs)!")
+            # Only mark what was actually sent — the rest can show up in the next run
+            for job in to_send:
+                seen_jobs.add(job["id"])
+            save_seen_jobs(seen_jobs)
+        else:
+            print("[Telegram] Sending failed — jobs NOT marked as seen, will retry next run.")
     else:
         send_no_jobs_message()
         print("[Telegram] No new jobs notification sent.")

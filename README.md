@@ -1,6 +1,6 @@
 # UAE Job Scraper 🚀
 
-A Python job scraper that monitors **LinkedIn** and **Wuzzuf** for UAE tech jobs and sends new listings directly to your **Telegram** — automatically, 3 times daily (7AM, 11AM, 5PM UAE time) via GitHub Actions.
+A Python job scraper that monitors **LinkedIn, Indeed, Bayt, GulfTalent and Dubizzle** for **UAE-only** jobs across **all sectors** (hospitality, customer service, admin, business, tech, and more) — with **Al Ain** as a priority location and **Emirati-targeted roles** flagged 🇦🇪 — and sends new listings directly to your **Telegram**, automatically, 3 times daily (7AM, 11AM, 5PM UAE time) via GitHub Actions.
 
 No server needed. Completely free to run.
 
@@ -13,8 +13,8 @@ No server needed. Completely free to run.
 ## How It Works
 
 1. GitHub Actions triggers the scraper 3 times daily at 7AM, 11AM, and 5PM UAE time
-2. The scraper searches LinkedIn across all configured locations and Wuzzuf for tech jobs
-3. Jobs are filtered by relevance — senior roles, unrelated fields, and already-seen jobs are excluded
+2. The scraper searches every configured source for every keyword in Al Ain and across the UAE
+3. Jobs are filtered and ranked — non-UAE locations, senior roles, scams, low-pay roles and already-seen jobs are excluded; Al Ain jobs and Emirati-targeted roles are ranked first
 4. New matching jobs are sent to your Telegram with title, company, location, and apply link
 5. Seen jobs are saved back to the repo so you never get duplicates
 
@@ -34,7 +34,7 @@ Found 6 new jobs matching your profile
 💼 Full Stack Developer
 🏢 Careem
 📍 Abu Dhabi, UAE
-🌐 Wuzzuf
+🌐 Indeed
 🔗 Apply Now
 ...
 ```
@@ -210,3 +210,19 @@ telegram-job-hunter/
 ## License
 
 MIT
+
+## Configuring the scraper (`config.py`)
+
+| Setting | What it does |
+|---|---|
+| `LOCATIONS` / `PRIORITY_LOCATIONS` | Where to search; Al Ain jobs get a score bonus |
+| `ENABLED_SECTORS` / `KEYWORDS_BY_SECTOR` | Which sectors (emirati, hospitality, office_admin_hr, business, tech) to search; edit or add keywords |
+| `ENABLED_SOURCES` | Turn individual job boards on/off |
+| `EMIRATI_ONLY` | `True` = only send roles aimed at UAE nationals; `False` = send everything, ranked with Emirati roles first |
+| `PREFERRED_COMPANIES` | Employers that get a score bonus |
+| `MAX_YEARS_EXPERIENCE`, `MIN_SALARY_AED_MONTHLY` | Experience cap, and an optional salary floor (`0` = off; listed salaries are still shown) |
+| `REJECT_*_KEYWORDS` | Titles / text that are always skipped |
+
+Indeed is scraped through [`python-jobspy`](https://github.com/speedyapply/JobSpy), since Indeed blocks plain `requests` calls.
+
+Run the offline sanity checks for the filters with `python tests/test_filters.py`.
