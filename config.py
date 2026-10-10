@@ -163,7 +163,7 @@ EMIRATI_DESCRIPTION_KEYWORDS = [
 MIN_SCORE = 1
 
 # Only skip a job if it clearly asks for MORE than this many years of experience.
-MAX_YEARS_EXPERIENCE = 4
+MAX_YEARS_EXPERIENCE = 2
 
 # Salary floor (AED / month). 0 = OFF: nothing is filtered by pay, you negotiate in person.
 # Listed salaries (when a board shows one, e.g. Indeed) are still displayed in the alert.
@@ -242,5 +242,6 @@ TELEGRAM_SEND_DELAY_SEC = 1.1
 # --- File to track seen jobs ---
 SEEN_JOBS_FILE = "seen_jobs.json"
 
-# --- Max jobs per notification message (a run sends up to 2x this) ---
-MAX_JOBS_PER_MESSAGE = 10
+# --- Max jobs sent per run (best-scoring first; split over several Telegram messages) ---
+# 3 runs a day x 40 = up to 120 alerts/day. Raise it if you want to see more of the backlog.
+MAX_JOBS_PER_RUN = 40

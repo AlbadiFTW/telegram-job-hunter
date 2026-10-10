@@ -219,6 +219,7 @@ MIT
 | `ENABLED_SECTORS` / `KEYWORDS_BY_SECTOR` | Which sectors (emirati, hospitality, office_admin_hr, business, tech) to search; edit or add keywords |
 | `ENABLED_SOURCES` | Turn individual job boards on/off |
 | `EMIRATI_ONLY` | `True` = only send roles aimed at UAE nationals; `False` = send everything, ranked with Emirati roles first |
+| `MIN_SCORE`, `MAX_JOBS_PER_RUN` | How picky the filter is (raise `MIN_SCORE` to 3 for fewer, better matches) and how many jobs are sent per run |
 | `PREFERRED_COMPANIES` | Employers that get a score bonus |
 | `MAX_YEARS_EXPERIENCE`, `MIN_SALARY_AED_MONTHLY` | Experience cap, and an optional salary floor (`0` = off; listed salaries are still shown) |
 | `REJECT_*_KEYWORDS` | Titles / text that are always skipped |

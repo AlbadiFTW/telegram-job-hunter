@@ -5,6 +5,7 @@ import json
 import time
 import hashlib
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import lru_cache
 from bs4 import BeautifulSoup
@@ -22,7 +23,7 @@ from config import (
     REJECT_TITLE_KEYWORDS, REJECT_ANYWHERE_KEYWORDS,
     MAX_YEARS_EXPERIENCE, MIN_SALARY_AED_MONTHLY,
     INDEED_RESULTS_WANTED, INDEED_HOURS_OLD,
-    SEEN_JOBS_FILE, MAX_JOBS_PER_MESSAGE,
+    SEEN_JOBS_FILE, MAX_JOBS_PER_RUN,
     TELEGRAM_MAX_CHARS, TELEGRAM_SEND_DELAY_SEC, MIN_SCORE,
     TELEGRAM_BOT_TOKEN as _CONFIG_TOKEN,
     TELEGRAM_CHAT_ID as _CONFIG_CHAT_ID,
@@ -484,7 +485,8 @@ def send_jobs_in_chunks(jobs, total_new):
     header = (
         f"🚀 <b>Job Alert — {date_str}</b>\n"
         f"Found <b>{total_new} new jobs</b> matching your profile\n"
-        f"🇦🇪 = Emirati-targeted   ⭐ = Al Ain\n"
+        + (f"Showing the top <b>{len(jobs)}</b>, best matches first\n" if len(jobs) < total_new else "")
+        + f"🇦🇪 = Emirati-targeted   ⭐ = Al Ain\n"
         f"{'─' * 30}\n\n"
     )
 
@@ -522,7 +524,63 @@ def send_no_jobs_message():
 # MAIN
 # ============================================================
 
+# Each job board gets its own worker thread (so they run side by side instead of
+# one after another). Inside a worker the requests are still sequential and polite.
+
+def _worker_linkedin():
+    out = []
+    for keyword in SEARCH_KEYWORDS:
+        for location in LOCATIONS:
+            out.append(scrape_linkedin(keyword, location))
+            time.sleep(3)
+    return out
+
+
+def _worker_indeed():
+    out = []
+    for keyword in SEARCH_KEYWORDS:
+        for location in LOCATIONS:
+            out.append(scrape_indeed(keyword, location))
+            time.sleep(1)
+    return out
+
+
+def _worker_bayt():
+    out = []
+    for keyword in SEARCH_KEYWORDS:
+        for location in LOCATIONS:
+            out.append(scrape_bayt(keyword, location))
+            time.sleep(1)
+    return out
+
+
+def _worker_gulftalent():
+    out = []
+    for keyword in SEARCH_KEYWORDS:
+        out.append(scrape_gulftalent(keyword))
+        time.sleep(1)
+    return out
+
+
+def _worker_dubizzle():
+    out = []
+    for keyword in SEARCH_KEYWORDS:
+        out.append(scrape_dubizzle(keyword))
+        time.sleep(1)
+    return out
+
+
+SOURCE_WORKERS = {
+    "linkedin": ("LinkedIn", _worker_linkedin),
+    "indeed": ("Indeed", _worker_indeed),
+    "bayt": ("Bayt", _worker_bayt),
+    "gulftalent": ("GulfTalent", _worker_gulftalent),
+    "dubizzle": ("Dubizzle", _worker_dubizzle),
+}
+
+
 def main():
+    started = time.time()
     print(f"\n{'='*50}")
     print(f"Job Scraper Started — {datetime.now().strftime('%d %b %Y %H:%M')}")
     print(f"{'='*50}\n")
@@ -530,46 +588,39 @@ def main():
     seen_jobs = load_seen_jobs()
     candidates = {}   # job id -> job
 
-    def collect(label, raw_jobs):
-        kept = 0
-        for raw in raw_jobs:
-            job = evaluate_job(raw)
-            if not job or job["id"] in seen_jobs:
+    active = [(label, fn) for key, (label, fn) in SOURCE_WORKERS.items() if ENABLED_SOURCES.get(key)]
+    print(f"Searching {len(SEARCH_KEYWORDS)} keywords x {len(LOCATIONS)} locations on: "
+          f"{', '.join(label for label, _ in active)}\n")
+
+    with ThreadPoolExecutor(max_workers=max(1, len(active))) as pool:
+        futures = [(label, pool.submit(fn)) for label, fn in active]
+
+        for label, future in futures:
+            try:
+                batches = future.result()
+            except Exception as e:
+                print(f"  [{label}] crashed: {e}")
                 continue
-            existing = candidates.get(job["id"])
-            if existing is None or job["score"] > existing["score"]:
-                candidates[job["id"]] = job
-            kept += 1
-        print(f"  [{label}] {len(raw_jobs)} scraped, {kept} relevant")
-
-    for keyword in SEARCH_KEYWORDS:
-        print(f"Searching: '{keyword}'...")
-
-        for location in LOCATIONS:
-            short = location.split(",")[0]
-            if ENABLED_SOURCES.get("linkedin"):
-                collect(f"LinkedIn/{short}", scrape_linkedin(keyword, location))
-                time.sleep(3)
-            if ENABLED_SOURCES.get("indeed"):
-                collect(f"Indeed/{short}", scrape_indeed(keyword, location))
-                time.sleep(2)
-            if ENABLED_SOURCES.get("bayt"):
-                collect(f"Bayt/{short}", scrape_bayt(keyword, location))
-
-        if ENABLED_SOURCES.get("gulftalent"):
-            collect("GulfTalent", scrape_gulftalent(keyword))
-        if ENABLED_SOURCES.get("dubizzle"):
-            collect("Dubizzle", scrape_dubizzle(keyword))
-
-        time.sleep(2)
+            scraped = relevant = 0
+            for batch in batches:
+                for raw in batch:
+                    scraped += 1
+                    job = evaluate_job(raw)
+                    if not job or job["id"] in seen_jobs:
+                        continue
+                    relevant += 1
+                    existing = candidates.get(job["id"])
+                    if existing is None or job["score"] > existing["score"]:
+                        candidates[job["id"]] = job
+            print(f"  [{label}] {scraped} scraped, {relevant} new & relevant")
 
     all_jobs = sorted(candidates.values(), key=lambda j: j["score"], reverse=True)
     print(f"\nTotal new jobs found: {len(all_jobs)}")
 
     if all_jobs:
-        to_send = all_jobs[:MAX_JOBS_PER_MESSAGE * 2]
+        to_send = all_jobs[:MAX_JOBS_PER_RUN]
         if send_jobs_in_chunks(to_send, len(all_jobs)):
-            print(f"[Telegram] Notification sent ({len(to_send)} jobs)!")
+            print(f"[Telegram] Notification sent ({len(to_send)} of {len(all_jobs)} jobs)!")
             # Only mark what was actually sent — the rest can show up in the next run
             for job in to_send:
                 seen_jobs.add(job["id"])
@@ -580,7 +631,7 @@ def main():
         send_no_jobs_message()
         print("[Telegram] No new jobs notification sent.")
 
-    print("\nDone!")
+    print(f"\nDone in {(time.time() - started) / 60:.1f} min!")
 
 
 if __name__ == "__main__":
