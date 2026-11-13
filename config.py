@@ -1,7 +1,8 @@
 # ============================================================
 # Job Scraper Configuration
 # Tailored for: Abdul Rahman Albadi
-# Scope: UAE only · all sectors · Al Ain is a priority location
+# Scope: Abu Dhabi emirate (Abu Dhabi + Al Ain) · Emiratization roles only
+#        · roles needing 0-3 years of experience
 # ============================================================
 
 # --- Telegram Settings ---
@@ -11,48 +12,77 @@ TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
 
 # ============================================================
-# WHERE TO SEARCH (UAE only)
+# WHERE TO SEARCH — Abu Dhabi and Al Ain only
 # ============================================================
 
-# Scraper searches every keyword in each location below.
-# "Al Ain" is searched separately so it isn't buried under Dubai/Abu Dhabi listings.
 LOCATIONS = [
     "Al Ain, Abu Dhabi, United Arab Emirates",
-    "United Arab Emirates",          # nationwide: Dubai, Abu Dhabi, Sharjah, ...
+    "Abu Dhabi, United Arab Emirates",
 ]
 
-# Jobs whose location contains one of these get a score bonus (sorted to the top).
-PRIORITY_LOCATIONS = ["al ain", "al-ain", "alain"]
+# A job is kept ONLY if its location text contains one of these.
+# (Dubai, Sharjah, a bare "United Arab Emirates", other countries... are all dropped.)
+ALLOWED_LOCATION_MARKERS = [
+    "al ain", "alain", "al-ain", "abu dhabi", "abudhabi",
+    "al dhafra", "ruwais", "madinat zayed", "liwa", "ghayathi",
+    "mussafah", "musaffah", "khalifa city", "yas island", "saadiyat",
+    "masdar", "al reem", "reem island", "al maryah", "adgm", "zayed city",
+    "al wathba", "al shamkha", "al raha", "al bahia", "shakhbout", "baniyas",
+]
+
+# Jobs in Al Ain get ranked first.
+PRIORITY_LOCATIONS = ["al ain", "alain", "al-ain"]
 PRIORITY_LOCATION_BONUS = 2
 
 # Employers you actively want to hear about (matched against company name).
 PREFERRED_COMPANIES = ["aloft", "hilton"]
 PREFERRED_COMPANY_BONUS = 2
 
-# A job is kept only if its location text looks like the UAE.
-# Anything mentioning another country is dropped (see FOREIGN_LOCATION_MARKERS).
-UAE_LOCATION_MARKERS = [
-    "uae", "united arab emirates", "ae", "emirates",
-    "al ain", "abu dhabi", "dubai", "sharjah", "ajman", "umm al quwain",
-    "umm al-quwain", "ras al khaimah", "ras al-khaimah", "rak", "fujairah",
-    "fujeirah", "khor fakkan", "khorfakkan", "al dhafra", "ruwais", "liwa",
-    "madinat zayed", "ghayathi", "masdar", "yas island", "saadiyat",
-    "jebel ali", "dubai silicon oasis", "difc", "adgm",
+# ============================================================
+# EMIRATIZATION FILTER
+# ============================================================
+
+# True  -> ONLY send roles aimed at UAE nationals
+# False -> send everything relevant (Emirati roles still ranked first)
+EMIRATI_ONLY = True
+EMIRATI_BONUS = 5
+
+# Matched in the job TITLE.
+EMIRATI_TITLE_KEYWORDS = [
+    "emirati", "emiratis", "uae national", "uae nationals", "emiratization",
+    "emiratisation", "national talent", "nationals only", "national graduate",
 ]
-FOREIGN_LOCATION_MARKERS = [
-    "oman", "muscat", "salalah", "sohar", "qatar", "doha", "saudi", "riyadh",
-    "jeddah", "dammam", "khobar", "kuwait", "bahrain", "manama", "egypt",
-    "cairo", "jordan", "amman", "lebanon", "beirut", "india", "pakistan",
-    "united kingdom", "london", "united states", "remote - worldwide",
+# Matched in the job DESCRIPTION. Stricter on purpose, so "Emirati cuisine" at a
+# restaurant doesn't count as an Emiratization role.
+EMIRATI_DESCRIPTION_KEYWORDS = [
+    "uae national", "uae nationals", "emiratization", "emiratisation",
+    "emirati national", "emirati nationals", "emirati candidate",
+    "emirati candidates", "emirati graduate", "emirati graduates",
+    "emiratis only", "open to emiratis", "for emiratis", "national talent",
+    "nationals only", "local nationals", "emirati applicants",
+    "uae citizens", "uae citizen",
+    # Arabic
+    "مواطن إماراتي", "مواطنين إماراتيين", "الإماراتيين", "إماراتيين",
+    "التوطين", "توطين", "مواطني الدولة",
 ]
 
 # ============================================================
-# WHAT TO SEARCH FOR (grouped by sector — switch groups on/off)
+# EXPERIENCE FILTER
 # ============================================================
+
+# Skip a job if its description asks for MORE than this many years of experience.
+# "3-5 years" (minimum 3) still passes. Jobs that don't state years are kept.
+MAX_YEARS_EXPERIENCE = 3
+
+# ============================================================
+# WHAT TO SEARCH FOR (LinkedIn searches)
+# ============================================================
+# The search terms are Emirati-focused. The scraper then opens each result to read
+# the full description, so it can confirm it really is an Emiratization role and
+# check the experience requirement.
 
 KEYWORDS_BY_SECTOR = {
-    # Roles aimed at UAE nationals (Emiratization / national graduate programmes)
-    "emirati": [
+    "core": [
         "Emirati",
         "UAE national",
         "Emiratization",
@@ -61,115 +91,73 @@ KEYWORDS_BY_SECTOR = {
         "national talent program",
     ],
     "hospitality": [
-        "hotel receptionist",
-        "front office",
-        "guest relations",
-        "guest service agent",
-        "hospitality trainee",
-        "reservations agent",
-        "concierge",
-        "food and beverage",
-        "restaurant supervisor",
-        "events coordinator",
+        "Emirati hotel",
+        "Emirati guest relations",
+        "Emirati front office",
+        "Emirati hospitality",
     ],
     "office_admin_hr": [
-        "customer service",
-        "administrative assistant",
-        "executive assistant",
-        "HR coordinator",
-        "recruitment coordinator",
-        "receptionist",
-        "operations coordinator",
-        "project coordinator",
-        "data entry",
-        "document controller",
+        "Emirati customer service",
+        "Emirati administrative",
+        "Emirati HR",
+        "Emirati executive assistant",
+        "Emirati receptionist",
     ],
     "business": [
-        "business analyst",
-        "sales executive",
-        "marketing coordinator",
-        "public relations",
-        "relationship officer",
-        "banking",
-        "procurement",
-        "logistics coordinator",
-        "research assistant",
-        "teaching assistant",
+        "Emirati sales",
+        "Emirati marketing",
+        "Emirati banking",
+        "Emirati business analyst",
+        "Emirati operations",
     ],
     "tech": [
-        "full stack developer",
-        "software engineer",
-        "backend developer",
-        "frontend developer",
-        "React developer",
-        "Node.js developer",
-        "Next.js developer",
-        "Python developer",
-        "junior software engineer",
-        "graduate software engineer",
+        "Emirati developer",
+        "Emirati software engineer",
+        "Emirati IT",
     ],
 }
 
-# Comment a sector out to skip it. Fewer sectors = faster runs.
-ENABLED_SECTORS = ["emirati", "hospitality", "office_admin_hr", "business", "tech"]
+ENABLED_SECTORS = ["core", "hospitality", "office_admin_hr", "business", "tech"]
+
+# How many result pages (25 jobs each) to read per keyword. Core terms get 2 pages.
+PAGES_PER_SECTOR = {"core": 2}
+DEFAULT_PAGES = 1
 
 SEARCH_KEYWORDS = [kw for sector in ENABLED_SECTORS for kw in KEYWORDS_BY_SECTOR[sector]]
+SEARCH_QUERIES = [
+    (kw, PAGES_PER_SECTOR.get(sector, DEFAULT_PAGES))
+    for sector in ENABLED_SECTORS for kw in KEYWORDS_BY_SECTOR[sector]
+]
+
+# LinkedIn "posted within" window: r86400 = 24h, r172800 = 48h, r604800 = 7 days.
+# Tip: use r604800 for ONE run to catch up on the past week, then switch back.
+LINKEDIN_TIME_WINDOW = "r86400"
+
+# Max job pages opened per run to read the full description (the slow part).
+# Jobs not reached this run are picked up next run.
+MAX_DETAIL_FETCHES_PER_RUN = 120
 
 # ============================================================
-# WHERE TO SEARCH (job boards)
+# JOB BOARDS
 # ============================================================
-
+# Only LinkedIn is on. Indeed was removed. Naukrigulf can't be added with this kind
+# of scraper (see README). The three boards below are kept in the code but OFF:
+# they only show job titles, so an Emiratization role is only recognised if the
+# title itself says so.
 ENABLED_SOURCES = {
     "linkedin": True,
-    "indeed": True,      # via the python-jobspy library (ae.indeed.com)
-    "bayt": True,
-    "gulftalent": True,
-    "dubizzle": True,
-    # Wuzzuf removed: it is an Egypt-focused board, not a UAE one.
+    "bayt": False,
+    "gulftalent": False,
+    "dubizzle": False,
 }
-
-# Indeed (JobSpy) settings
-INDEED_RESULTS_WANTED = 20
-INDEED_HOURS_OLD = 48          # look back 48h so a missed run doesn't lose jobs
-
-# ============================================================
-# EMIRATI-TARGETED ROLES
-# ============================================================
-
-# True  -> ONLY send jobs that are aimed at UAE nationals (Emiratization roles etc.)
-# False -> send everything relevant, but rank Emirati-targeted roles first (🇦🇪)
-EMIRATI_ONLY = False
-EMIRATI_BONUS = 5
-
-# Matched in the job TITLE (any of these).
-EMIRATI_TITLE_KEYWORDS = [
-    "emirati", "emiratis", "uae national", "uae nationals", "emiratization",
-    "emiratisation", "national talent", "nationals only", "national graduate",
-]
-# Matched in the job DESCRIPTION. Kept stricter on purpose so that things like
-# "Emirati cuisine" at a restaurant don't count as an Emiratization role.
-EMIRATI_DESCRIPTION_KEYWORDS = [
-    "uae national", "uae nationals", "emiratization", "emiratisation",
-    "emirati national", "emirati nationals", "emirati candidate",
-    "emirati candidates", "emirati graduate", "emirati graduates",
-    "emiratis only", "open to emiratis", "for emiratis", "national talent",
-    "nationals only", "local nationals",
-]
 
 # ============================================================
 # RELEVANCE SCORING
 # ============================================================
-# Jobs are scored — only sent if score >= MIN_SCORE
-MIN_SCORE = 1
-
-# Only skip a job if it clearly asks for MORE than this many years of experience.
-MAX_YEARS_EXPERIENCE = 2
-
-# Salary floor (AED / month). 0 = OFF: nothing is filtered by pay, you negotiate in person.
-# Listed salaries (when a board shows one, e.g. Indeed) are still displayed in the alert.
-# Set a number (e.g. 8000) to hide listings whose stated AED salary is below it —
-# listings with no salary are always kept either way.
-MIN_SALARY_AED_MONTHLY = 0
+# base score = boosts + sector words in title + seniority penalties
+# A job is dropped if its base score is below MIN_SCORE (0 = "not penalised into the ground").
+# Al Ain / preferred-employer / Emirati bonuses are added AFTER this check, for ranking.
+MIN_SCORE = 0
 
 # Boosts: matched in title + description (whole words / phrases only)
 SCORE_BOOST_KEYWORDS = [
@@ -185,7 +173,7 @@ SCORE_BOOST_KEYWORDS = [
     ("rest api", 1), ("jwt", 1), ("socket.io", 2),
 ]
 
-# Sector words matched in the job TITLE only (+1 each) — keeps non-IT roles in play.
+# Sector words matched in the job TITLE only (+1 each)
 SECTOR_TITLE_KEYWORDS = [
     "receptionist", "front office", "front desk", "guest", "hotel",
     "hospitality", "concierge", "reservations", "food and beverage",
@@ -234,14 +222,16 @@ REJECT_ANYWHERE_KEYWORDS = [
 ]
 
 # ============================================================
-# TELEGRAM SAFETY
+# TELEGRAM
 # ============================================================
 TELEGRAM_MAX_CHARS = 3900    # Telegram limit is 4096, leave margin
 TELEGRAM_SEND_DELAY_SEC = 1.1
 
-# --- File to track seen jobs ---
+# With a narrow filter many runs find nothing. False = stay quiet on empty runs.
+SEND_EMPTY_NOTICE = False
+
+# --- File to track seen jobs (also remembers jobs checked and rejected) ---
 SEEN_JOBS_FILE = "seen_jobs.json"
 
 # --- Max jobs sent per run (best-scoring first; split over several Telegram messages) ---
-# 3 runs a day x 40 = up to 120 alerts/day. Raise it if you want to see more of the backlog.
 MAX_JOBS_PER_RUN = 40

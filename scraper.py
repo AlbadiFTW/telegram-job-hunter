@@ -14,16 +14,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from config import (
-    SEARCH_KEYWORDS, LOCATIONS, ENABLED_SOURCES,
-    PRIORITY_LOCATIONS, PRIORITY_LOCATION_BONUS,
+    SEARCH_KEYWORDS, SEARCH_QUERIES, LOCATIONS, ENABLED_SOURCES,
+    ALLOWED_LOCATION_MARKERS, PRIORITY_LOCATIONS, PRIORITY_LOCATION_BONUS,
     PREFERRED_COMPANIES, PREFERRED_COMPANY_BONUS,
-    UAE_LOCATION_MARKERS, FOREIGN_LOCATION_MARKERS,
     EMIRATI_ONLY, EMIRATI_BONUS, EMIRATI_TITLE_KEYWORDS, EMIRATI_DESCRIPTION_KEYWORDS,
     SCORE_BOOST_KEYWORDS, SCORE_PENALTY_KEYWORDS, SECTOR_TITLE_KEYWORDS,
-    REJECT_TITLE_KEYWORDS, REJECT_ANYWHERE_KEYWORDS,
-    MAX_YEARS_EXPERIENCE, MIN_SALARY_AED_MONTHLY,
-    INDEED_RESULTS_WANTED, INDEED_HOURS_OLD,
-    SEEN_JOBS_FILE, MAX_JOBS_PER_RUN,
+    REJECT_TITLE_KEYWORDS, REJECT_ANYWHERE_KEYWORDS, MAX_YEARS_EXPERIENCE,
+    LINKEDIN_TIME_WINDOW, MAX_DETAIL_FETCHES_PER_RUN,
+    SEEN_JOBS_FILE, MAX_JOBS_PER_RUN, SEND_EMPTY_NOTICE,
     TELEGRAM_MAX_CHARS, TELEGRAM_SEND_DELAY_SEC, MIN_SCORE,
     TELEGRAM_BOT_TOKEN as _CONFIG_TOKEN,
     TELEGRAM_CHAT_ID as _CONFIG_CHAT_ID,
@@ -61,6 +59,8 @@ def http_get(url, retries=2):
 
 # ============================================================
 # SEEN JOBS TRACKER
+# (remembers jobs that were sent AND jobs that were opened and rejected,
+#  so the slow description check never repeats for the same job)
 # ============================================================
 
 def load_seen_jobs():
@@ -99,11 +99,18 @@ def has_any(text, phrases):
 
 
 _NON_EMIRATI_RE = re.compile(r"\bnon[\s-]?(emirati|uae national)s?\b")
+
+_NUM_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+              "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+_NUM_WORD_RE = re.compile(r"\b(" + "|".join(_NUM_WORDS) + r")\b(?=[^.\n]{0,12}\byears?\b)")
 _YEARS_RE = re.compile(r"(\d{1,2})\s*(?:\+|\s*(?:-|–|—|to)\s*\d{1,2}\s*\+?)?\s*(?:years?|yrs?)\b")
 
 
 def min_years_required(text):
-    """Smallest 'N years' figure that sits next to the word 'experience', or None."""
+    """Smallest 'N years' figure that sits next to the word 'experience', or None.
+    Understands '3 years', '3+ years', '3-5 years', 'three (3) years', 'two to four years'."""
+    text = re.sub(r"\(\s*\d+\s*\)", " ", text)                      # "three (3) years" -> "three  years"
+    text = _NUM_WORD_RE.sub(lambda m: str(_NUM_WORDS[m.group(1)]), text)
     found = []
     for m in _YEARS_RE.finditer(text):
         window = text[max(0, m.start() - 60): m.end() + 60]
@@ -113,84 +120,39 @@ def min_years_required(text):
 
 
 # ============================================================
-# LOCATION / SALARY FILTERS
+# LOCATION FILTER — Abu Dhabi + Al Ain only
 # ============================================================
 
-def is_uae_location(location):
-    """UAE-only filter. All sources are searched with a UAE scope already, so an
-    unknown/empty location is accepted — but anything naming another country is not."""
-    loc = (location or "").lower()
-    if has_any(loc, UAE_LOCATION_MARKERS):
+def is_allowed_location(location):
+    """True only for Abu Dhabi emirate (incl. Al Ain). An empty location is accepted
+    because some boards don't show one; every real location must match."""
+    loc = (location or "").lower().strip()
+    if not loc:
         return True
-    if has_any(loc, FOREIGN_LOCATION_MARKERS):
-        return False
-    return True
-
-
-def _s(x, default=""):
-    """str() that turns None / NaN (pandas) into a default instead of the text 'nan'."""
-    if x is None or (isinstance(x, float) and x != x):
-        return default
-    return str(x)
-
-
-def _num(x):
-    try:
-        v = float(x)
-        return v if v == v else None   # NaN -> None
-    except (TypeError, ValueError):
-        return None
-
-
-def monthly_aed(amount, interval, currency):
-    """Convert a listed salary to AED/month. Returns None if not convertible."""
-    amount = _num(amount)
-    if amount is None or (currency and str(currency).upper() != "AED"):
-        return None
-    interval = str(interval or "").lower()
-    factors = {"monthly": 1, "yearly": 1 / 12, "weekly": 4.33, "daily": 22, "hourly": 22 * 8}
-    return amount * factors[interval] if interval in factors else None
-
-
-def salary_below_floor(job):
-    if not MIN_SALARY_AED_MONTHLY:
-        return False
-    top = monthly_aed(job.get("max_amount") or job.get("min_amount"),
-                      job.get("interval"), job.get("currency"))
-    return top is not None and top < MIN_SALARY_AED_MONTHLY
-
-
-def salary_text(job):
-    lo, hi = _num(job.get("min_amount")), _num(job.get("max_amount"))
-    if lo is None and hi is None:
-        return ""
-    cur = job.get("currency") or ""
-    rng = f"{lo:,.0f}–{hi:,.0f}" if lo and hi and lo != hi else f"{(hi or lo):,.0f}"
-    return f"{rng} {cur} / {job.get('interval') or '?'}".strip()
+    return has_any(loc, ALLOWED_LOCATION_MARKERS)
 
 
 # ============================================================
 # RELEVANCE SCORING
 # ============================================================
 
-def evaluate_job(raw):
-    """Returns the job dict enriched with score/flags, or None if it should be skipped."""
+def evaluate_job(raw, check_emirati=True):
+    """Returns the job dict enriched with score/flags, or None if it should be skipped.
+    check_emirati=False is used for the cheap first pass, before the description is read."""
     title = (raw.get("title") or "").strip()
     if not title:
         return None
     description = raw.get("description") or ""
     company = raw.get("company") or "Unknown"
-    location = raw.get("location") or "UAE"
+    location = raw.get("location") or ""
 
     title_l = title.lower()
     text = f"{title} {description}".lower()
 
     # --- hard rejects ---
-    if not is_uae_location(location):
+    if not is_allowed_location(location):
         return None
     if has_any(title_l, REJECT_TITLE_KEYWORDS) or has_any(text, REJECT_ANYWHERE_KEYWORDS):
-        return None
-    if salary_below_floor(raw):
         return None
 
     years = min_years_required(text)
@@ -201,19 +163,20 @@ def evaluate_job(raw):
     title_nat = _NON_EMIRATI_RE.sub(" ", title_l)
     desc_nat = _NON_EMIRATI_RE.sub(" ", description.lower())
     emirati = has_any(title_nat, EMIRATI_TITLE_KEYWORDS) or has_any(desc_nat, EMIRATI_DESCRIPTION_KEYWORDS)
-    if EMIRATI_ONLY and not emirati:
+    if check_emirati and EMIRATI_ONLY and not emirati:
         return None
 
-    # --- score ---
-    score = 0
-    score += sum(b for kw, b in SCORE_BOOST_KEYWORDS if has(text, kw))
-    score += sum(1 for kw in SECTOR_TITLE_KEYWORDS if has(title_l, kw))
-    score += sum(p for kw, p in SCORE_PENALTY_KEYWORDS if has(title_l, kw))
-    if years == MAX_YEARS_EXPERIENCE:
-        score -= 1
+    # --- base score: is it a sensible job for a fresh graduate? ---
+    base = sum(b for kw, b in SCORE_BOOST_KEYWORDS if has(text, kw))
+    base += sum(1 for kw in SECTOR_TITLE_KEYWORDS if has(title_l, kw))
+    base += sum(p for kw, p in SCORE_PENALTY_KEYWORDS if has(title_l, kw))
+    if base < MIN_SCORE:
+        return None
+
+    # --- ranking bonuses (added after the check above) ---
+    score = base
     if emirati:
         score += EMIRATI_BONUS
-
     loc_l = f"{location} {title}".lower()
     al_ain = any(p in loc_l for p in PRIORITY_LOCATIONS)
     if al_ain:
@@ -221,19 +184,15 @@ def evaluate_job(raw):
     if has_any(company.lower(), PREFERRED_COMPANIES):
         score += PREFERRED_COMPANY_BONUS
 
-    if score < MIN_SCORE:
-        return None
-
     return {
         "title": title,
         "company": company,
-        "location": location,
+        "location": location or "Abu Dhabi",
         "url": raw.get("url", ""),
         "source": raw.get("source", ""),
         "score": score,
         "emirati": emirati,
         "al_ain": al_ain,
-        "salary": salary_text(raw),
         "id": make_job_id(title, company),
     }
 
@@ -242,19 +201,25 @@ def evaluate_job(raw):
 # LINKEDIN SCRAPER
 # ============================================================
 
-def scrape_linkedin(keyword, location):
+def _linkedin_job_id(card, url):
+    urn = card.get("data-entity-urn") or ""
+    m = re.search(r"(\d{6,})\s*$", urn) or re.search(r"(\d{8,})(?:\?|$)", url or "")
+    return m.group(1) if m else None
+
+
+def scrape_linkedin(keyword, location, page=0):
     jobs = []
     query = keyword.replace(" ", "%20")
     loc = location.replace(" ", "%20")
     url = (
         f"https://www.linkedin.com/jobs/search/"
-        f"?keywords={query}&location={loc}&f_TPR=r86400"
+        f"?keywords={query}&location={loc}&f_TPR={LINKEDIN_TIME_WINDOW}&start={page * 25}"
     )
 
     response = http_get(url)
     if response is None or response.status_code != 200:
         code = response.status_code if response is not None else "no response"
-        print(f"  [LinkedIn] Failed '{keyword}' in {location} — {code}")
+        print(f"  [LinkedIn] Failed '{keyword}' in {location.split(',')[0]} p{page + 1} — {code}")
         return jobs
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -266,11 +231,13 @@ def scrape_linkedin(keyword, location):
             link_tag = listing.find("a", {"class": "base-card__full-link"})
             if not title_tag or not link_tag:
                 continue
+            job_url = link_tag["href"].split("?")[0]
             jobs.append({
                 "title": title_tag.get_text(strip=True),
                 "company": company_tag.get_text(strip=True) if company_tag else "Unknown",
                 "location": location_tag.get_text(strip=True) if location_tag else "",
-                "url": link_tag["href"].split("?")[0],
+                "url": job_url,
+                "job_id": _linkedin_job_id(listing, job_url),
                 "source": "LinkedIn",
             })
         except Exception:
@@ -278,61 +245,31 @@ def scrape_linkedin(keyword, location):
     return jobs
 
 
-# ============================================================
-# INDEED SCRAPER (via python-jobspy — Indeed blocks plain requests)
-# ============================================================
-
-def scrape_indeed(keyword, location):
-    try:
-        from jobspy import scrape_jobs
-    except ImportError:
-        print("  [Indeed] python-jobspy not installed — skipping (pip install python-jobspy)")
-        return []
-
-    short_location = location.split(",")[0].strip()   # "Al Ain, Abu Dhabi, ..." -> "Al Ain"
-    try:
-        df = scrape_jobs(
-            site_name=["indeed"],
-            search_term=keyword,
-            location=short_location,
-            country_indeed="UAE",
-            results_wanted=INDEED_RESULTS_WANTED,
-            hours_old=INDEED_HOURS_OLD,
-            description_format="markdown",
-            verbose=0,
-        )
-    except Exception as e:
-        print(f"  [Indeed] Error '{keyword}' in {short_location}: {e}")
-        return []
-
-    jobs = []
-    for row in df.to_dict("records"):
-        jobs.append({
-            "title": _s(row.get("title")),
-            "company": _s(row.get("company"), "Unknown"),
-            "location": _s(row.get("location")),
-            "url": _s(row.get("job_url")),
-            "description": _s(row.get("description")),
-            "min_amount": row.get("min_amount"),
-            "max_amount": row.get("max_amount"),
-            "interval": row.get("interval"),
-            "currency": row.get("currency"),
-            "source": "Indeed",
-        })
-    return jobs
+def fetch_linkedin_description(job_id):
+    """Full description + LinkedIn's criteria (seniority level etc.). None if it failed."""
+    response = http_get(f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}")
+    if response is None or response.status_code != 200:
+        return None
+    soup = BeautifulSoup(response.text, "html.parser")
+    body = soup.find("div", {"class": "show-more-less-html__markup"})
+    text = body.get_text(" ", strip=True) if body else ""
+    criteria = " ".join(
+        li.get_text(" ", strip=True)
+        for li in soup.find_all("li", {"class": "description__job-criteria-item"})
+    )
+    combined = f"{criteria} {text}".strip()
+    return combined or None
 
 
 # ============================================================
-# BAYT SCRAPER
+# BAYT / GULFTALENT / DUBIZZLE (OFF by default — titles only, see config.py)
 # ============================================================
 
 def scrape_bayt(keyword, location):
     jobs = []
     slug = re.sub(r"[^a-z0-9]+", "-", keyword.lower()).strip("-")
-    if location.lower().startswith("al ain"):
-        url = f"https://www.bayt.com/en/uae/jobs/{slug}-jobs-in-al-ain/"
-    else:
-        url = f"https://www.bayt.com/en/uae/jobs/{slug}-jobs/"
+    city = re.sub(r"[^a-z0-9]+", "-", location.split(",")[0].lower()).strip("-")
+    url = f"https://www.bayt.com/en/uae/jobs/{slug}-jobs-in-{city}/"
 
     response = http_get(url)
     if response is None or response.status_code != 200:
@@ -363,10 +300,6 @@ def scrape_bayt(keyword, location):
     return jobs
 
 
-# ============================================================
-# GULFTALENT SCRAPER
-# ============================================================
-
 def scrape_gulftalent(keyword):
     jobs = []
     query = keyword.replace(" ", "+")
@@ -392,7 +325,6 @@ def scrape_gulftalent(keyword):
                 "title": title_tag.get_text(strip=True),
                 "company": company_tag.get_text(strip=True) if company_tag else "Unknown",
                 "location": location_tag.get_text(strip=True) if location_tag else "",
-                # NOTE: the old code had a typo here ("gulftalen.com") which broke every link
                 "url": "https://www.gulftalent.com" + href if href.startswith("/") else href,
                 "source": "GulfTalent",
             })
@@ -400,10 +332,6 @@ def scrape_gulftalent(keyword):
             continue
     return jobs
 
-
-# ============================================================
-# DUBIZZLE SCRAPER
-# ============================================================
 
 def scrape_dubizzle(keyword):
     jobs = []
@@ -471,22 +399,21 @@ def format_job(job):
         f"💼 <b>{html.escape(job['title'])}</b>{badges}",
         f"• 🏢 {html.escape(job['company'])}",
         f"• 📍 {html.escape(job['location'])}",
+        f"• 🌐 {html.escape(job['source'])}",
+        f"• 🔗 <a href=\"{html.escape(job['url'], quote=True)}\">Apply Now</a>",
     ]
-    if job.get("salary"):
-        lines.append(f"• 💰 {html.escape(job['salary'])}")
-    lines.append(f"• 🌐 {html.escape(job['source'])}")
-    lines.append(f"• 🔗 <a href=\"{html.escape(job['url'], quote=True)}\">Apply Now</a>")
     return "\n".join(lines) + "\n\n"
 
 
 def send_jobs_in_chunks(jobs, total_new):
     """Returns True only if every message was delivered."""
     date_str = datetime.now().strftime("%d %b %Y")
+    scope = "Emiratization jobs" if EMIRATI_ONLY else "jobs"
     header = (
         f"🚀 <b>Job Alert — {date_str}</b>\n"
-        f"Found <b>{total_new} new jobs</b> matching your profile\n"
+        f"Found <b>{total_new} new {scope}</b> in Abu Dhabi &amp; Al Ain\n"
         + (f"Showing the top <b>{len(jobs)}</b>, best matches first\n" if len(jobs) < total_new else "")
-        + f"🇦🇪 = Emirati-targeted   ⭐ = Al Ain\n"
+        + f"⭐ = Al Ain\n"
         f"{'─' * 30}\n\n"
     )
 
@@ -515,7 +442,7 @@ def send_no_jobs_message():
     date_str = datetime.now().strftime("%d %b %Y")
     send_telegram_message(
         f"📭 <b>Job Alert — {date_str}</b>\n\n"
-        "No new jobs found today matching your profile.\n\n"
+        "No new matching jobs found this time.\n\n"
         "Keep your applications going — new listings appear daily!"
     )
 
@@ -524,24 +451,15 @@ def send_no_jobs_message():
 # MAIN
 # ============================================================
 
-# Each job board gets its own worker thread (so they run side by side instead of
-# one after another). Inside a worker the requests are still sequential and polite.
+# Each enabled job board gets its own worker thread (so boards run side by side).
 
 def _worker_linkedin():
     out = []
-    for keyword in SEARCH_KEYWORDS:
+    for keyword, pages in SEARCH_QUERIES:
         for location in LOCATIONS:
-            out.append(scrape_linkedin(keyword, location))
-            time.sleep(3)
-    return out
-
-
-def _worker_indeed():
-    out = []
-    for keyword in SEARCH_KEYWORDS:
-        for location in LOCATIONS:
-            out.append(scrape_indeed(keyword, location))
-            time.sleep(1)
+            for page in range(pages):
+                out.append(scrape_linkedin(keyword, location, page))
+                time.sleep(3)
     return out
 
 
@@ -572,11 +490,22 @@ def _worker_dubizzle():
 
 SOURCE_WORKERS = {
     "linkedin": ("LinkedIn", _worker_linkedin),
-    "indeed": ("Indeed", _worker_indeed),
     "bayt": ("Bayt", _worker_bayt),
     "gulftalent": ("GulfTalent", _worker_gulftalent),
     "dubizzle": ("Dubizzle", _worker_dubizzle),
 }
+
+
+def read_descriptions(pending):
+    """pending: list of (job_id, raw). Opens each LinkedIn job page (3 at a time, politely)."""
+    def fetch(item):
+        job_id, raw = item
+        description = fetch_linkedin_description(raw["job_id"])
+        time.sleep(1)
+        return job_id, raw, description
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        return list(pool.map(fetch, pending))
 
 
 def main():
@@ -586,12 +515,16 @@ def main():
     print(f"{'='*50}\n")
 
     seen_jobs = load_seen_jobs()
-    candidates = {}   # job id -> job
+    candidates = {}      # job id -> job that passed every filter
+    needs_detail = {}    # job id -> (score, raw): looks promising, description not read yet
+    rejected_ids = set() # opened, read, and rejected -> remembered so we never open them again
 
     active = [(label, fn) for key, (label, fn) in SOURCE_WORKERS.items() if ENABLED_SOURCES.get(key)]
-    print(f"Searching {len(SEARCH_KEYWORDS)} keywords x {len(LOCATIONS)} locations on: "
-          f"{', '.join(label for label, _ in active)}\n")
+    print(f"Sources: {', '.join(label for label, _ in active)} | "
+          f"{len(SEARCH_QUERIES)} keywords x {len(LOCATIONS)} locations "
+          f"(Abu Dhabi + Al Ain only)\n")
 
+    # ---- 1. search ----
     with ThreadPoolExecutor(max_workers=max(1, len(active))) as pool:
         futures = [(label, pool.submit(fn)) for label, fn in active]
 
@@ -601,36 +534,64 @@ def main():
             except Exception as e:
                 print(f"  [{label}] crashed: {e}")
                 continue
-            scraped = relevant = 0
+            scraped = promising = 0
             for batch in batches:
                 for raw in batch:
                     scraped += 1
-                    job = evaluate_job(raw)
-                    if not job or job["id"] in seen_jobs:
+                    first_pass = evaluate_job(raw, check_emirati=False)   # location / title / seniority
+                    if not first_pass or first_pass["id"] in seen_jobs or first_pass["id"] in candidates:
                         continue
-                    relevant += 1
-                    existing = candidates.get(job["id"])
-                    if existing is None or job["score"] > existing["score"]:
-                        candidates[job["id"]] = job
-            print(f"  [{label}] {scraped} scraped, {relevant} new & relevant")
+                    if raw.get("source") == "LinkedIn" and raw.get("job_id"):
+                        if first_pass["id"] not in needs_detail:
+                            promising += 1
+                        needs_detail[first_pass["id"]] = (first_pass["score"], raw)
+                    else:
+                        job = evaluate_job(raw)
+                        if job:
+                            promising += 1
+                            candidates[job["id"]] = job
+            print(f"  [{label}] {scraped} listings scraped, {promising} in Abu Dhabi/Al Ain and worth a closer look")
+
+    # ---- 2. read the full description of the promising LinkedIn jobs ----
+    pending = sorted(needs_detail.items(), key=lambda kv: kv[1][0], reverse=True)
+    pending = [(job_id, raw) for job_id, (_, raw) in pending][:MAX_DETAIL_FETCHES_PER_RUN]
+    skipped = len(needs_detail) - len(pending)
+    print(f"\nReading {len(pending)} job descriptions"
+          + (f" ({skipped} more next run)" if skipped else "") + "...")
+
+    failed = 0
+    for job_id, raw, description in read_descriptions(pending):
+        if description is None:
+            failed += 1          # not marked as seen -> retried next run
+            continue
+        raw["description"] = description
+        job = evaluate_job(raw)
+        if job:
+            candidates[job["id"]] = job
+        else:
+            rejected_ids.add(job_id)
+    if failed:
+        print(f"  {failed} descriptions couldn't be loaded (will retry next run)")
 
     all_jobs = sorted(candidates.values(), key=lambda j: j["score"], reverse=True)
-    print(f"\nTotal new jobs found: {len(all_jobs)}")
+    print(f"\nMatching jobs (Emirati + 0-{MAX_YEARS_EXPERIENCE} yrs + Abu Dhabi/Al Ain): {len(all_jobs)}")
 
+    # ---- 3. notify ----
+    seen_jobs |= rejected_ids
     if all_jobs:
         to_send = all_jobs[:MAX_JOBS_PER_RUN]
         if send_jobs_in_chunks(to_send, len(all_jobs)):
             print(f"[Telegram] Notification sent ({len(to_send)} of {len(all_jobs)} jobs)!")
-            # Only mark what was actually sent — the rest can show up in the next run
-            for job in to_send:
-                seen_jobs.add(job["id"])
-            save_seen_jobs(seen_jobs)
+            seen_jobs |= {job["id"] for job in to_send}   # only what was actually sent
         else:
             print("[Telegram] Sending failed — jobs NOT marked as seen, will retry next run.")
-    else:
+    elif SEND_EMPTY_NOTICE:
         send_no_jobs_message()
         print("[Telegram] No new jobs notification sent.")
+    else:
+        print("Nothing new this run (no notification sent).")
 
+    save_seen_jobs(seen_jobs)
     print(f"\nDone in {(time.time() - started) / 60:.1f} min!")
 
 

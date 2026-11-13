@@ -1,20 +1,19 @@
 # UAE Job Scraper 🚀
 
-A Python job scraper that monitors **LinkedIn, Indeed, Bayt, GulfTalent and Dubizzle** for **UAE-only** jobs across **all sectors** (hospitality, customer service, admin, business, tech, and more) — with **Al Ain** as a priority location and **Emirati-targeted roles** flagged 🇦🇪 — and sends new listings directly to your **Telegram**, automatically, 3 times daily (7AM, 11AM, 5PM UAE time) via GitHub Actions.
+A Python job scraper that monitors **LinkedIn** for **Emiratization jobs in Abu Dhabi and Al Ain** (roles open to UAE nationals, needing 0–3 years of experience, across all sectors — hospitality, customer service, admin, business, tech and more) and sends new listings directly to your **Telegram**, automatically, 3 times daily (7AM, 11AM, 5PM UAE time) via GitHub Actions.
 
 No server needed. Completely free to run.
 
 ## New Additions
 
 - **Job Application Tracker Bot** — log applications and track interview/rejection stats via Telegram commands.
-- **Daily Interview Questions** — sends one technical and one behavioural question each morning.
 - **Weekly Summary** — sends a weekly snapshot of applications and outcomes.
 
 ## How It Works
 
 1. GitHub Actions triggers the scraper 3 times daily at 7AM, 11AM, and 5PM UAE time
-2. The scraper searches every configured source for every keyword in Al Ain and across the UAE
-3. Jobs are filtered and ranked — non-UAE locations, senior roles, scams, low-pay roles and already-seen jobs are excluded; Al Ain jobs and Emirati-targeted roles are ranked first
+2. The scraper searches LinkedIn for Emirati-focused keywords in Al Ain and Abu Dhabi, then opens each promising job to read the full description
+3. A job is sent only if it is in Abu Dhabi/Al Ain, is aimed at UAE nationals, and asks for 3 years of experience or less. Senior roles, scams, low-pay roles and already-seen jobs are excluded; Al Ain jobs are ranked first
 4. New matching jobs are sent to your Telegram with title, company, location, and apply link
 5. Seen jobs are saved back to the repo so you never get duplicates
 
@@ -34,7 +33,7 @@ Found 6 new jobs matching your profile
 💼 Full Stack Developer
 🏢 Careem
 📍 Abu Dhabi, UAE
-🌐 Indeed
+🌐 LinkedIn
 🔗 Apply Now
 ...
 ```
@@ -105,15 +104,6 @@ Commands:
 
 Data is saved in `applications.json`.
 
-### Daily Interview Questions
-
-Run manually:
-```bash
-python daily_question.py
-```
-
-Questions are stored in `questions.py`. Seen questions are tracked in `seen_questions.json`.
-
 ### Weekly Summary
 
 Run manually:
@@ -134,7 +124,7 @@ Uses `applications.json` to generate a weekly Telegram summary.
 - Remove `lxml` from `requirements.txt` and run `pip install requests beautifulsoup4 python-dotenv` instead
 
 **No jobs found**
-- LinkedIn and Wuzzuf occasionally change their HTML — open an issue and I'll push a fix
+- LinkedIn occasionally changes its HTML — open an issue and I'll push a fix
 - Test manually by running `python scraper.py` locally
 
 **Duplicate jobs appearing**
@@ -181,16 +171,13 @@ Edit `.github/workflows/daily_scrape.yml`:
 
 ```
 telegram-job-hunter/
-├── scraper.py              # Main scraper — LinkedIn + Wuzzuf
+├── scraper.py              # Main scraper — LinkedIn (Bayt/GulfTalent/Dubizzle available but off)
 ├── config.py               # Keywords, filters, settings
 ├── setup_telegram.py       # One-time helper to get chat ID
 ├── bot.py                  # Telegram bot for application tracking
-├── daily_question.py       # Sends daily interview questions
-├── questions.py            # Question bank for daily questions
 ├── weekly_summary.py       # Weekly application summary sender
 ├── applications.json       # Tracked applications (auto-updated)
 ├── seen_jobs.json          # Tracks seen jobs (auto-updated by GitHub Actions)
-├── seen_questions.json     # Tracks seen interview questions
 ├── requirements.txt        # Python dependencies
 ├── .env                    # Your secrets — local only, never committed
 ├── .gitignore              # Keeps .env off GitHub
@@ -215,15 +202,19 @@ MIT
 
 | Setting | What it does |
 |---|---|
-| `LOCATIONS` / `PRIORITY_LOCATIONS` | Where to search; Al Ain jobs get a score bonus |
-| `ENABLED_SECTORS` / `KEYWORDS_BY_SECTOR` | Which sectors (emirati, hospitality, office_admin_hr, business, tech) to search; edit or add keywords |
-| `ENABLED_SOURCES` | Turn individual job boards on/off |
-| `EMIRATI_ONLY` | `True` = only send roles aimed at UAE nationals; `False` = send everything, ranked with Emirati roles first |
-| `MIN_SCORE`, `MAX_JOBS_PER_RUN` | How picky the filter is (raise `MIN_SCORE` to 3 for fewer, better matches) and how many jobs are sent per run |
-| `PREFERRED_COMPANIES` | Employers that get a score bonus |
-| `MAX_YEARS_EXPERIENCE`, `MIN_SALARY_AED_MONTHLY` | Experience cap, and an optional salary floor (`0` = off; listed salaries are still shown) |
+| `LOCATIONS` / `ALLOWED_LOCATION_MARKERS` | Where to search, and which location texts are accepted (Abu Dhabi emirate incl. Al Ain only) |
+| `PRIORITY_LOCATIONS` | Al Ain jobs get a ranking bonus (⭐) |
+| `EMIRATI_ONLY` | `True` = only roles aimed at UAE nationals (checked in the full job description); `False` = everything, Emirati roles ranked first |
+| `MAX_YEARS_EXPERIENCE` | Skip jobs asking for more than this many years (default 3). Jobs that don't state years are kept |
+| `ENABLED_SECTORS` / `KEYWORDS_BY_SECTOR` | The Emirati-focused LinkedIn searches; edit or add keywords |
+| `LINKEDIN_TIME_WINDOW` | `r86400` = last 24h. Use `r604800` for one run to catch up on the past week |
+| `MAX_DETAIL_FETCHES_PER_RUN` | How many job pages to open per run (the slow part) |
+| `MIN_SCORE`, `MAX_JOBS_PER_RUN` | How picky the seniority/relevance filter is, and how many jobs are sent per run |
+| `PREFERRED_COMPANIES` | Employers that get a ranking bonus |
+| `SEND_EMPTY_NOTICE` | `True` = also send a message when a run finds nothing |
+| `ENABLED_SOURCES` | Bayt / GulfTalent / Dubizzle can be switched on, but they only show job titles, so Emiratization roles are only recognised if the title says so |
 | `REJECT_*_KEYWORDS` | Titles / text that are always skipped |
 
-Indeed is scraped through [`python-jobspy`](https://github.com/speedyapply/JobSpy), since Indeed blocks plain `requests` calls.
+**Why no Indeed or Naukrigulf?** Indeed was removed on request. Naukrigulf can't be scraped with a plain script: its pages are rendered by JavaScript and its data endpoint sits behind bot protection (existing scrapers rely on paid residential proxies). Set up a free email alert on naukrigulf.com for "Emirati" in Abu Dhabi / Al Ain instead.
 
 Run the offline sanity checks for the filters with `python tests/test_filters.py`.
